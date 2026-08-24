@@ -104,20 +104,27 @@ void
 rx_purge(void)
 
 {
+	int ready;
+	ssize_t nread;
 	struct timeval t;
 	fd_set f;
 	uint8_t c;
 
-	t.tv_sec = 0;
-	t.tv_usec = 0;
+	for (;;) {
+		t.tv_sec = 0;
+		t.tv_usec = 0;
+		FD_ZERO(&f);
+		FD_SET(0,&f);
 
-	FD_ZERO(&f);
-	FD_SET(0,&f);
-
-	while (select(1,&f,NULL,NULL,&t)) {
-		read(0,&c,1);		
+		ready = select(1,&f,NULL,NULL,&t);
+		if (ready <= 0) {
+			break;
+		}
+		nread = read(0,&c,1);
+		if (nread <= 0) {
+			break;
+		}
 	}
-
 }
 
 int last_sent = -1;
