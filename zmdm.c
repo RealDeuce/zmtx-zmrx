@@ -61,6 +61,19 @@ static size_t n_in_inputbuffer;
 static size_t inputbuffer_index;
 static bool termios_saved;
 
+enum tx_class {
+	TX_NORMAL = 0,
+	TX_ESCAPE_ALWAYS = 1,
+	TX_ESCAPE_CONTROL = 2,
+	TX_ESCAPE_CR = 4
+};
+
+static uint8_t tx_classes[256];
+static bool tx_classes_initialized;
+
+#define TX_DATA_WIRE_CAPACITY (2 * ZMAXSPLEN + 11)
+static uint8_t tx_data_wire[TX_DATA_WIRE_CAPACITY];
+
 /*
  * routines to make the io channel raw and restore it
  * to its normal state.
@@ -173,31 +186,59 @@ tx_esc(int c)
 	return tx_raw(c ^ 0x40);
 }
 
+static void
+initialize_tx_classes(void)
+
+{
+	unsigned c;
+
+	for (c=0;c<256;c++) {
+		if (c == ZDLE || c == 0x10 || c == 0x90 || c == XON ||
+		    c == 0x91 || c == XOFF || c == 0x93) {
+			tx_classes[c] = TX_ESCAPE_ALWAYS;
+		}
+		else if (c == CR || c == 0x8d) {
+			tx_classes[c] = TX_ESCAPE_CR;
+		}
+		else if ((c & 0x60) == 0) {
+			tx_classes[c] = TX_ESCAPE_CONTROL;
+		}
+		else {
+			tx_classes[c] = TX_NORMAL;
+		}
+	}
+	tx_classes_initialized = true;
+}
+
+static unsigned
+active_tx_classes(void)
+
+{
+	if (!tx_classes_initialized) {
+		initialize_tx_classes();
+	}
+	return TX_ESCAPE_ALWAYS |
+	    (escape_all_control_characters ? TX_ESCAPE_CONTROL | TX_ESCAPE_CR : 0);
+}
+
+static bool
+tx_byte_needs_escape(uint8_t c,int previous,unsigned active)
+
+{
+	unsigned action = tx_classes[c] & active;
+
+	if (action == TX_ESCAPE_CR) {
+		return previous == '@';
+	}
+	return action != TX_NORMAL;
+}
+
 static int
 tx(uint8_t c)
 
 {
-	switch (c) {
-		case ZDLE:
-			return tx_esc(c);
-		case 0x8d:
-		case CR:
-			if (escape_all_control_characters && last_sent == '@') {
-				return tx_esc(c);
-			}
-			break;
-		case 0x10:
-		case 0x90:
-		case XON:
-		case 0x91:
-		case XOFF:
-		case 0x93:
-			return tx_esc(c);
-		default:
-			if (escape_all_control_characters && (c & 0x60) == 0) {
-				return tx_esc(c);
-			}
-			break;
+	if (tx_byte_needs_escape(c,last_sent,active_tx_classes())) {
+		return tx_esc(c);
 	}
 	return tx_raw((int)c);
 }
@@ -348,71 +389,81 @@ tx_header(const uint8_t * p)
 	return tx_hex_header(p);
 }
 
-static int
-tx_32_data(uint8_t sub_frame_type,const uint8_t * p,size_t l)
+static void
+buffer_raw(uint8_t c,size_t * used,int * previous)
 
 {
-	uint32_t crc = UINT32_MAX;
-
-	while (l > 0) {
-		crc = UPDCRC32(*p,crc);
-		if (tx(*p++) != 0) {
-			return -1;
-		}
-		l--;
-	}
-	crc = UPDCRC32(sub_frame_type,crc);
-	if (tx_raw(ZDLE) != 0 || tx_raw(sub_frame_type) != 0) {
-		return -1;
-	}
-	crc = ~crc;
-	if (tx((uint8_t)crc) != 0 || tx((uint8_t)(crc >> 8)) != 0 ||
-	    tx((uint8_t)(crc >> 16)) != 0 || tx((uint8_t)(crc >> 24)) != 0) {
-		return -1;
-	}
-	return 0;
+	tx_data_wire[(*used)++] = c;
+	*previous = c & 0x7f;
 }
 
-static int
-tx_16_data(uint8_t sub_frame_type,const uint8_t * p,size_t l)
+static void
+buffer_tx(uint8_t c,size_t * used,int * previous,unsigned active)
 
 {
-	uint16_t crc = 0;
-
-	while (l > 0) {
-		crc = UPDCRC16(*p,crc);
-		if (tx(*p++) != 0) {
-			return -1;
-		}
-		l--;
+	if (tx_byte_needs_escape(c,*previous,active)) {
+		buffer_raw(ZDLE,used,previous);
+		buffer_raw((uint8_t)(c ^ 0x40),used,previous);
 	}
-	crc = UPDCRC16(sub_frame_type,crc);
-	if (tx_raw(ZDLE) != 0 || tx_raw(sub_frame_type) != 0) {
-		return -1;
+	else {
+		buffer_raw(c,used,previous);
 	}
-	crc = UPDCRC16(0,crc);
-	crc = UPDCRC16(0,crc);
-	if (tx((uint8_t)(crc >> 8)) != 0 || tx((uint8_t)crc) != 0) {
-		return -1;
-	}
-	return 0;
 }
 
 int
 tx_data(uint8_t sub_frame_type,const uint8_t * p,size_t l)
 
 {
+	int previous = last_sent;
+	size_t i;
+	size_t used = 0;
+	unsigned active = active_tx_classes();
+
+	if (l > ZMAXSPLEN) {
+		return -1;
+	}
+	for (i=0;i<l;i++) {
+		buffer_tx(p[i],&used,&previous,active);
+	}
+	buffer_raw(ZDLE,&used,&previous);
+	buffer_raw(sub_frame_type,&used,&previous);
+
 	if (want_fcs_32 && can_fcs_32) {
-		if (tx_32_data(sub_frame_type,p,l) != 0) {
-			return -1;
+		uint32_t crc = crc32_update(UINT32_MAX,p,l);
+
+		crc = ~UPDCRC32(sub_frame_type,crc);
+		buffer_tx((uint8_t)crc,&used,&previous,active);
+		buffer_tx((uint8_t)(crc >> 8),&used,&previous,active);
+		buffer_tx((uint8_t)(crc >> 16),&used,&previous,active);
+		buffer_tx((uint8_t)(crc >> 24),&used,&previous,active);
+	}
+	else {
+		uint16_t crc = 0;
+
+		for (i=0;i<l;i++) {
+			crc = UPDCRC16(p[i],crc);
+		}
+		crc = UPDCRC16(sub_frame_type,crc);
+		crc = UPDCRC16(0,crc);
+		crc = UPDCRC16(0,crc);
+		buffer_tx((uint8_t)(crc >> 8),&used,&previous,active);
+		buffer_tx((uint8_t)crc,&used,&previous,active);
+	}
+
+	if (sub_frame_type == ZCRCW) {
+		buffer_raw(XON,&used,&previous);
+	}
+#ifdef DEBUG
+	if (raw_trace) {
+		for (i=0;i<used;i++) {
+			fprintf(stderr,"%02x ",tx_data_wire[i]);
 		}
 	}
-	else if (tx_16_data(sub_frame_type,p,l) != 0) {
+#endif
+	if (fwrite(tx_data_wire,1,used,stdout) != used) {
 		return -1;
 	}
-	if (sub_frame_type == ZCRCW && tx_raw(XON) != 0) {
-		return -1;
-	}
+	last_sent = previous;
 	return tx_flush();
 }
 
@@ -600,13 +651,6 @@ rx(int to)
 					continue;
 				default:
 					/*
-	 				 * if all control characters should be escaped and 
-					 * this one wasnt then its spurious and should be dropped.
-					 */
-					if (escape_all_control_characters && (c & 0x60) == 0) {
-						continue;
-					}
-					/*
 					 * normal character; return it.
 					 */
 					return c;
@@ -650,13 +694,6 @@ rx(int to)
 				case ZRUB1:
 					return 0xff;
 				default:
-					if (escape_all_control_characters && (c & 0x60) == 0) {
-						/*
-						 * a not escaped control character; probably
-						 * something from a network. just drop it.
-						 */
-						continue;
-					}
 					/*
 					 * legitimate escape sequence.
 					 * rebuild the orignal and return it.

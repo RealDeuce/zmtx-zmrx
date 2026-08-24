@@ -1,3 +1,5 @@
 *.o
 /zmtx
 /zmrx
+/tests/test_crc
+/tests/__pycache__/

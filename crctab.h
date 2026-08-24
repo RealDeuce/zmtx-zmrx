@@ -11,10 +11,13 @@
  * wow ! a whole macro ! lets copyright it.....
  */
 
+#include <stddef.h>
 #include <stdint.h>
 
 extern const uint16_t crc16tab[0x100];
 extern const uint32_t crc32tab[0x100];
+
+uint32_t crc32_update(uint32_t, const uint8_t *, size_t);
 
 #define UPDCRC16(cp, crc) \
 	((uint16_t)(crc16tab[((uint16_t)(crc) >> 8) & UINT16_C(0xff)] ^ \
