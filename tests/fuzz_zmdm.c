@@ -42,6 +42,13 @@ fuzz_write(void * context,const uint8_t * buffer,size_t length)
 }
 
 static int
+fuzz_flush(void * context)
+{
+	(void)context;
+	return ZMODEM_OK;
+}
+
+static int
 fuzz_poll(void * context)
 {
 	const struct fuzz_io * io = context;
@@ -70,6 +77,7 @@ initialize(struct zmodem * protocol,struct fuzz_io * input,
 	io.context = input;
 	io.read = fuzz_read;
 	io.write = fuzz_write;
+	io.flush = fuzz_flush;
 	io.poll = fuzz_poll;
 	io.purge = fuzz_purge;
 	(void)zmodem_init(protocol,&io);

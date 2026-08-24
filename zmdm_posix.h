@@ -10,7 +10,7 @@
 #include <stdint.h>
 #include <termios.h>
 
-struct zmodem_io;
+#include "zmdm.h"
 
 struct zmodem_posix_io {
 	int input_fd;
@@ -18,6 +18,8 @@ struct zmodem_posix_io {
 	int owned_fd;
 	bool termios_saved;
 	struct termios saved_termios;
+	uint8_t output_buffer[ZMODEM_TX_BURST_CAPACITY];
+	size_t output_count;
 };
 
 void zmodem_posix_io_init(struct zmodem_posix_io *, int, int);

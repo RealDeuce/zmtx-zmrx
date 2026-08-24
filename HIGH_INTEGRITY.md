@@ -28,7 +28,7 @@ diagnostics, Clang and GCC static analysis, clang-tidy, address and undefined
 behaviour sanitizers, a 10,000-run fuzz smoke test, and structural coverage.
 No unexplained findings remained.
 
-At reassessment, production coverage was 91.52% line coverage, 90.44% branch
+At reassessment, production coverage was 91.36% line coverage, 90.38% branch
 coverage, and 100% modified condition/decision coverage for applicable
 decisions.  These results support the initial coding-profile and test work;
 they do not demonstrate complete requirements coverage or constitute a safety

@@ -64,11 +64,15 @@ enum zmodem_result {
 #define HDRLEN 5U
 #define ZMODEM_INPUT_CAPACITY (2U * ZMAXSPLEN)
 #define ZMODEM_TX_DATA_WIRE_CAPACITY (2U * ZMAXSPLEN + 11U)
+#define ZMODEM_TX_BINARY_HEADER_WIRE_CAPACITY 24U
+#define ZMODEM_TX_BURST_CAPACITY \
+	(ZMODEM_TX_BINARY_HEADER_WIRE_CAPACITY + ZMODEM_TX_DATA_WIRE_CAPACITY)
 
 struct zmodem_io {
 	void * context;
 	int (*read)(void *,uint8_t *,size_t,size_t *,int);
 	int (*write)(void *,const uint8_t *,size_t);
+	int (*flush)(void *);
 	int (*poll)(void *);
 	int (*purge)(void *);
 };

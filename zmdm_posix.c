@@ -107,16 +107,17 @@ posix_read(void * context,uint8_t * buffer,size_t capacity,size_t * count,
 }
 
 static int
-posix_write(void * context,const uint8_t * buffer,size_t length)
+posix_flush(void * context)
 {
 	struct zmodem_posix_io * io = context;
 	size_t offset = 0U;
 
-	while (offset < length) {
+	while (offset < io->output_count) {
 		ssize_t result;
 
 		for (;;) {
-			result = write(io->output_fd,&buffer[offset],length - offset);
+			result = write(io->output_fd,&io->output_buffer[offset],
+			    io->output_count - offset);
 			if (result >= 0) {
 				break;
 			}
@@ -125,9 +126,36 @@ posix_write(void * context,const uint8_t * buffer,size_t length)
 			}
 		}
 		if (result <= 0) {
+			if (offset > 0U) {
+				io->output_count -= offset;
+				(void)memmove(io->output_buffer,
+				    &io->output_buffer[offset],io->output_count);
+			}
 			return ZMODEM_IO_ERROR;
 		}
 		offset += (size_t)result;
+	}
+	io->output_count = 0U;
+	return ZMODEM_OK;
+}
+
+static int
+posix_write(void * context,const uint8_t * buffer,size_t length)
+{
+	struct zmodem_posix_io * io = context;
+
+	while (length > 0U) {
+		size_t available = sizeof(io->output_buffer) - io->output_count;
+		size_t copied = (length < available) ? length : available;
+
+		(void)memcpy(&io->output_buffer[io->output_count],buffer,copied);
+		io->output_count += copied;
+		buffer += copied;
+		length -= copied;
+		if ((io->output_count == sizeof(io->output_buffer)) &&
+		    (posix_flush(io) != ZMODEM_OK)) {
+			return ZMODEM_IO_ERROR;
+		}
 	}
 	return ZMODEM_OK;
 }
@@ -182,6 +210,7 @@ zmodem_posix_io_init(struct zmodem_posix_io * io,int input_fd,int output_fd)
 	io->output_fd = output_fd;
 	io->owned_fd = -1;
 	io->termios_saved = false;
+	io->output_count = 0U;
 }
 
 int
@@ -251,6 +280,7 @@ zmodem_posix_io_restore(struct zmodem_posix_io * io)
 void
 zmodem_posix_io_close(struct zmodem_posix_io * io)
 {
+	(void)posix_flush(io);
 	zmodem_posix_io_restore(io);
 	if (io->owned_fd >= 0) {
 		(void)close(io->owned_fd);
@@ -264,6 +294,7 @@ zmodem_posix_io_bind(struct zmodem_io * interface,struct zmodem_posix_io * io)
 	interface->context = io;
 	interface->read = posix_read;
 	interface->write = posix_write;
+	interface->flush = posix_flush;
 	interface->poll = posix_poll;
 	interface->purge = posix_purge;
 }

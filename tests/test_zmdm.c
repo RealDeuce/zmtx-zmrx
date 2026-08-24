@@ -18,6 +18,7 @@ struct fake_io {
 	size_t output_length;
 	int empty_read_result;
 	int write_result;
+	int flush_result;
 	size_t write_calls;
 	size_t fail_write_call;
 	bool override_read_count;
@@ -73,6 +74,14 @@ fake_write(void * context,const uint8_t * buffer,size_t length)
 }
 
 static int
+fake_flush(void * context)
+{
+	const struct fake_io * io = context;
+
+	return io->flush_result;
+}
+
+static int
 fake_poll(void * context)
 {
 	const struct fake_io * io = context;
@@ -99,6 +108,7 @@ initialize(struct zmodem * protocol,struct fake_io * fake)
 	io.context = fake;
 	io.read = fake_read;
 	io.write = fake_write;
+	io.flush = fake_flush;
 	io.poll = fake_poll;
 	io.purge = fake_purge;
 	if (zmodem_init(protocol,&io) != ZMODEM_OK) {
@@ -258,6 +268,7 @@ test_initialization_and_buffering(void)
 	io.context = &fake;
 	io.read = fake_read;
 	io.write = fake_write;
+	io.flush = fake_flush;
 	io.poll = fake_poll;
 	io.purge = fake_purge;
 	passed = expect(zmodem_init(NULL,&io) == ZMODEM_INVALID_ARGUMENT,
@@ -272,6 +283,10 @@ test_initialization_and_buffering(void)
 	passed = expect(zmodem_init(&protocol,&io) == ZMODEM_INVALID_ARGUMENT,
 	    "reject missing write callback") && passed;
 	io.write = fake_write;
+	io.flush = NULL;
+	passed = expect(zmodem_init(&protocol,&io) == ZMODEM_INVALID_ARGUMENT,
+	    "reject missing flush callback") && passed;
+	io.flush = fake_flush;
 	io.poll = NULL;
 	passed = expect(zmodem_init(&protocol,&io) == ZMODEM_INVALID_ARGUMENT,
 	    "reject missing poll callback") && passed;
@@ -293,6 +308,8 @@ test_initialization_and_buffering(void)
 	fake.purge_result = ZMODEM_IO_ERROR;
 	passed = expect(rx_purge(&protocol) == ZMODEM_IO_ERROR,
 	    "purge error") && passed;
+	fake.flush_result = ZMODEM_IO_ERROR;
+	passed = expect(tx_flush(&protocol) != 0,"flush error") && passed;
 	initialize(&protocol,&fake);
 	fake.override_read_count = true;
 	passed = expect(rx_raw(&protocol,1000) == ZMODEM_IO_ERROR,

@@ -66,6 +66,10 @@ test_pipe_transport(void)
 	}
 	passed = expect(io.write(io.context,output,sizeof(output)) == ZMODEM_OK,
 	    "write result") && passed;
+	passed = expect(posix_io.output_count == sizeof(output),
+	    "buffer output until flush") && passed;
+	passed = expect(io.flush(io.context) == ZMODEM_OK,"flush result") && passed;
+	passed = expect(posix_io.output_count == 0U,"empty flushed output") && passed;
 	passed = expect(read(output_pipe[0],written,sizeof(written)) ==
 	    (ssize_t)sizeof(output),"read output pipe") && passed;
 	passed = expect(memcmp(written,output,sizeof(output)) == 0,
@@ -85,8 +89,60 @@ test_pipe_transport(void)
 }
 
 static bool
+test_full_output_buffer(void)
+{
+	static uint8_t output[ZMODEM_TX_BURST_CAPACITY + 3U];
+	static uint8_t received[sizeof(output)];
+	struct zmodem_posix_io posix_io;
+	struct zmodem_io io;
+	char path[] = "/tmp/zmtx-posix-output.XXXXXX";
+	size_t offset = 0U;
+	size_t index;
+	int fd;
+	bool passed = true;
+
+	fd = mkstemp(path);
+	if (fd < 0) {
+		return expect(false,"create output-buffer file");
+	}
+	(void)unlink(path);
+	for (index = 0U; index < sizeof(output); index++) {
+		output[index] = (uint8_t)(index & 0xffU);
+	}
+	zmodem_posix_io_init(&posix_io,-1,fd);
+	zmodem_posix_io_bind(&io,&posix_io);
+	passed = expect(io.write(io.context,output,sizeof(output)) == ZMODEM_OK,
+	    "write beyond output-buffer capacity") && passed;
+	passed = expect(posix_io.output_count == 3U,
+	    "flush full output buffer") && passed;
+	passed = expect(io.flush(io.context) == ZMODEM_OK,
+	    "flush output-buffer remainder") && passed;
+	passed = expect(lseek(fd,0,SEEK_SET) == 0,"rewind output-buffer file") &&
+	    passed;
+	while (offset < sizeof(received)) {
+		ssize_t result = read(fd,&received[offset],sizeof(received) - offset);
+
+		if (result <= 0) {
+			passed = expect(false,"read buffered output") && passed;
+			break;
+		}
+		offset += (size_t)result;
+	}
+	passed = expect(offset == sizeof(received),"buffered output length") &&
+	    passed;
+	if (offset == sizeof(received)) {
+		passed = expect(memcmp(received,output,sizeof(output)) == 0,
+		    "buffered output bytes") && passed;
+	}
+	zmodem_posix_io_close(&posix_io);
+	passed = expect(close(fd) == 0,"close output-buffer file") && passed;
+	return passed;
+}
+
+static bool
 test_reported_failures(void)
 {
+	static const uint8_t full_output[ZMODEM_TX_BURST_CAPACITY] = { 0U };
 	struct zmodem_posix_io posix_io;
 	struct zmodem_io io;
 	uint8_t byte = 0U;
@@ -99,8 +155,14 @@ test_reported_failures(void)
 	    "invalid poll descriptor") && passed;
 	passed = expect(io.read(io.context,&byte,1U,&count,0) == ZMODEM_IO_ERROR,
 	    "invalid read descriptor") && passed;
-	passed = expect(io.write(io.context,&byte,1U) == ZMODEM_IO_ERROR,
-	    "invalid write descriptor") && passed;
+	passed = expect(io.write(io.context,&byte,1U) == ZMODEM_OK,
+	    "buffer write for invalid descriptor") && passed;
+	passed = expect(io.flush(io.context) == ZMODEM_IO_ERROR,
+	    "invalid write descriptor at flush") && passed;
+	zmodem_posix_io_init(&posix_io,-1,-1);
+	zmodem_posix_io_bind(&io,&posix_io);
+	passed = expect(io.write(io.context,full_output,sizeof(full_output)) ==
+	    ZMODEM_IO_ERROR,"invalid descriptor at automatic flush") && passed;
 	passed = expect(io.purge(io.context) == ZMODEM_IO_ERROR,
 	    "invalid purge descriptor") && passed;
 	passed = expect(zmodem_posix_io_make_raw(&posix_io) != 0,
@@ -293,6 +355,7 @@ main(void)
 	bool passed = true;
 
 	passed = test_pipe_transport() && passed;
+	passed = test_full_output_buffer() && passed;
 	passed = test_reported_failures() && passed;
 	passed = test_eof_and_closed_descriptor() && passed;
 	passed = test_owned_descriptor() && passed;

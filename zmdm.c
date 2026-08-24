@@ -53,7 +53,8 @@ int
 zmodem_init(struct zmodem * zmodem,const struct zmodem_io * io)
 {
 	if ((zmodem == NULL) || (io == NULL) || (io->read == NULL) ||
-	    (io->write == NULL) || (io->poll == NULL) || (io->purge == NULL)) {
+	    (io->write == NULL) || (io->flush == NULL) || (io->poll == NULL) ||
+	    (io->purge == NULL)) {
 		return ZMODEM_INVALID_ARGUMENT;
 	}
 	(void)memset(zmodem,0,sizeof(*zmodem));
@@ -167,8 +168,7 @@ int
 tx_flush(struct zmodem * zmodem)
 
 {
-	(void)zmodem;
-	return 0;
+	return (zmodem->io.flush(zmodem->io.context) == ZMODEM_OK) ? 0 : -1;
 }
 
 static int
@@ -516,57 +516,43 @@ rx_raw(struct zmodem * zmodem,int timeout_ms)
  * is relatively short.
  */
 
-static inline int
-rx(struct zmodem * zmodem,int timeout_ms)
-
+static bool
+rx_is_flow_control(int c)
 {
-	int c;
+	return (c == 0x11) || (c == 0x91) || (c == 0x13) || (c == 0x93);
+}
 
-	/*
-	 * outer loop for ever so for sure something valid
-	 * will come in; a timeout will occur or a session abort
-	 * will be received.
-	 */
+static bool
+rx_needs_slow_path(int c)
+{
+	return (c == ZDLE) || rx_is_flow_control(c);
+}
 
+static int
+rx_slow(struct zmodem * zmodem,int timeout_ms,int c)
+{
 	for (;;) {
-		for (;;) {
+		while (rx_is_flow_control(c)) {
 			c = rx_raw(zmodem,timeout_ms);
 			if (c < 0) {
 				return c;
 			}
-	
-			switch (c) {
-				case ZDLE:
-					break;
-				case 0x11:
-				case 0x91:
-				case 0x13:
-				case 0x93:
-					continue;
-				default:
-					/*
-					 * normal character; return it.
-					 */
-					return c;
-			}
-			break;
 		}
-	
+		if (c != ZDLE) {
+			return c;
+		}
+
 		/*
-	 	 * ZDLE encoded sequence or session abort.
+		 * ZDLE encoded sequence or session abort.
 		 * (or something illegal; then back to the top)
 		 */
-
 		for (;;) {
 			c = rx_raw(zmodem,timeout_ms);
 			if (c < 0) {
 				return c;
 			}
 
-			if (c == 0x11 || c == 0x13 || c == 0x91 || c == 0x93 || c == ZDLE) {
-				/*
-				 * these can be dropped.
-				 */
+			if (rx_needs_slow_path(c)) {
 				continue;
 			}
 
@@ -599,13 +585,23 @@ rx(struct zmodem * zmodem,int timeout_ms)
 			}
 			break;
 		}
+		c = rx_raw(zmodem,timeout_ms);
+		if (c < 0) {
+			return c;
+		}
 	}
+}
 
-	/*
-	 * not reached.
-	 */
+static inline int
+rx(struct zmodem * zmodem,int timeout_ms)
 
-	return 0;
+{
+	int c = rx_raw(zmodem,timeout_ms);
+
+	if ((c >= 0) && rx_needs_slow_path(c)) {
+		return rx_slow(zmodem,timeout_ms,c);
+	}
+	return c;
 }
 
 static int
@@ -672,7 +668,10 @@ rx_32_data(struct zmodem * zmodem,uint8_t * p,size_t capacity,size_t * l)
 	crc = UINT32_MAX;
 
 	do {
-		c = rx(zmodem,1000);
+		c = rx_raw(zmodem,1000);
+		if ((c >= 0) && rx_needs_slow_path(c)) {
+			c = rx_slow(zmodem,1000,c);
+		}
 
 		if (c < 0) {
 			return c;
@@ -733,7 +732,10 @@ rx_16_data(struct zmodem * zmodem,uint8_t * p,size_t capacity,size_t * l)
 	crc = 0;
 
 	do {
-		c = rx(zmodem,5000);
+		c = rx_raw(zmodem,5000);
+		if ((c >= 0) && rx_needs_slow_path(c)) {
+			c = rx_slow(zmodem,5000,c);
+		}
 
 		if (c < 0) {
 			return c;
