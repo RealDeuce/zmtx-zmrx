@@ -1,8 +1,6 @@
 
 #include "crctab.h"
 
-#include <stdbool.h>
-
 /* crctab calculated by Mark G. Mendel, Network Systems Corporation */
 const uint16_t crc16tab[256] = {
     0x0000,  0x1021,  0x2042,  0x3063,  0x4084,  0x50a5,  0x60c6,  0x70e7,
@@ -117,34 +115,28 @@ const uint32_t crc32tab[] = { /* CRC polynomial 0xedb88320 */
  * from the existing reflected IEEE CRC-32 table keeps the relationship
  * explicit and avoids importing another implementation or table source.
  */
-static uint32_t crc32_slicing[3][256];
-static bool crc32_slicing_initialized;
+#include "crctab_slicing.h"
 
-static void
-initialize_crc32_slicing(void)
-
+uint16_t
+crc16_update(uint16_t crc,uint8_t byte)
 {
-	size_t i;
-	size_t slice;
+	size_t index = ((size_t)(crc >> 8)) & 0xffU;
 
-	for (i=0;i<256;i++) {
-		uint32_t value = crc32tab[i];
+	return (uint16_t)(crc16tab[index] ^ (uint16_t)(crc << 8) ^ byte);
+}
 
-		for (slice=0;slice<3;slice++) {
-			value = crc32tab[value & UINT32_C(0xff)] ^ (value >> 8);
-			crc32_slicing[slice][i] = value;
-		}
-	}
-	crc32_slicing_initialized = true;
+uint32_t
+crc32_byte_update(uint32_t crc,uint8_t byte)
+{
+	size_t index = ((size_t)(crc ^ byte)) & 0xffU;
+
+	return crc32tab[index] ^ (crc >> 8);
 }
 
 uint32_t
 crc32_update(uint32_t crc,const uint8_t * data,size_t length)
 
 {
-	if (!crc32_slicing_initialized) {
-		initialize_crc32_slicing();
-	}
 	while (length >= 4) {
 		crc ^= (uint32_t)data[0] |
 		    ((uint32_t)data[1] << 8) |
@@ -158,7 +150,8 @@ crc32_update(uint32_t crc,const uint8_t * data,size_t length)
 		length -= 4;
 	}
 	while (length-- > 0) {
-		crc = UPDCRC32(*data++,crc);
+		crc = crc32_byte_update(crc,*data);
+		data += 1U;
 	}
 	return crc;
 }

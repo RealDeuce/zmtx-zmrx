@@ -33,9 +33,9 @@
  * and original author of zmtx/zmrx.
  */
 
-#ifndef _ZMODEM_H
+#ifndef ZMODEM_H_INCLUDED
 
-#define _ZMODEM_H
+#define ZMODEM_H_INCLUDED
 
 /*
  * ascii constants

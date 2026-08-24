@@ -40,10 +40,32 @@ jobs:
           CFLAGS: -O2 -Wall -Wextra -Werror -pedantic-errors
         run: make check check-install
 
+  quality:
+    name: High-integrity quality gates
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v6
+
+      - name: Static analysis
+        run: make check-static
+
+      - name: Sanitizers
+        run: make check-sanitize
+
+      - name: Fuzz smoke test
+        run: make check-fuzz
+
+      - name: Structural coverage
+        run: make coverage
+
   release:
     name: Package source release
     if: startsWith(github.ref, 'refs/tags/')
-    needs: build
+    needs:
+      - build
+      - quality
     runs-on: ubuntu-latest
     permissions:
       contents: write

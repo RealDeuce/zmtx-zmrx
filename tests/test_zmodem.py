@@ -28,6 +28,7 @@ ZRPOS = 9
 ZDATA = 10
 ZEOF = 11
 ZFERR = 12
+ZCOMPL = 15
 ZCRCE = 0x68
 ZCRCG = 0x69
 ZCRCQ = 0x6A
@@ -399,6 +400,92 @@ class ZmodemTests(unittest.TestCase):
                     process.kill()
                     process.wait()
 
+    def test_receiver_handles_session_control_headers(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            process, peer = self.start_receiver(temporary)
+            try:
+                peer.send(hex_header(ZRQINIT))
+                frame_type, _, _ = peer.header()
+                self.assertEqual(frame_type, ZRINIT)
+
+                peer.send(hex_header(ZACK))
+                frame_type, _, _ = peer.header()
+                self.assertEqual(frame_type, ZCOMPL)
+
+                for frame_type in (ZRQINIT, ZEOF):
+                    peer.send(hex_header(frame_type))
+                    response_type, _, _ = peer.header()
+                    self.assertEqual(response_type, ZRINIT)
+
+                returncode, stderr = finish_receiver(peer, process)
+                self.assertEqual(returncode, 0,
+                                 stderr.decode(errors="replace"))
+            finally:
+                peer.sock.close()
+                if process.poll() is None:
+                    process.kill()
+                    process.wait()
+
+    def test_receiver_retries_initial_handshake_after_timeout(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            process, peer = self.start_receiver(temporary)
+            try:
+                frame_type, _, _ = peer.header()
+                self.assertEqual(frame_type, ZRINIT)
+                returncode, stderr = finish_receiver(peer, process)
+                self.assertEqual(returncode, 0,
+                                 stderr.decode(errors="replace"))
+            finally:
+                peer.sock.close()
+                if process.poll() is None:
+                    process.kill()
+                    process.wait()
+
+    def test_receiver_reports_broken_invitation_output(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            process, peer = self.start_receiver(temporary)
+            peer.send(hex_header(ZEOF))
+            peer.sock.close()
+            stderr = process.communicate(timeout=10)[1]
+            self.assertEqual(process.returncode, 4,
+                             stderr.decode(errors="replace"))
+
+    def test_receiver_accepts_garbage_before_over_and_out(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            process, peer = self.start_receiver(temporary)
+            try:
+                peer.send(hex_header(ZFIN))
+                frame_type, _, _ = peer.header()
+                self.assertEqual(frame_type, ZFIN)
+                peer.send(b"garbageOfillerO")
+                stderr = process.communicate(timeout=10)[1]
+                self.assertEqual(process.returncode, 0,
+                                 stderr.decode(errors="replace"))
+            finally:
+                peer.sock.close()
+                if process.poll() is None:
+                    process.kill()
+                    process.wait()
+
+    def test_receiver_reports_over_and_out_timeouts(self):
+        for response in (b"", b"O"):
+            with self.subTest(response=response), \
+                    tempfile.TemporaryDirectory() as temporary:
+                process, peer = self.start_receiver(temporary)
+                try:
+                    peer.send(hex_header(ZFIN))
+                    frame_type, _, _ = peer.header()
+                    self.assertEqual(frame_type, ZFIN)
+                    peer.send(response)
+                    stderr = process.communicate(timeout=10)[1]
+                    self.assertEqual(process.returncode, 4,
+                                     stderr.decode(errors="replace"))
+                finally:
+                    peer.sock.close()
+                    if process.poll() is None:
+                        process.kill()
+                        process.wait()
+
     def test_sender_waits_for_each_non_streaming_ack(self):
         with tempfile.TemporaryDirectory() as temporary:
             payload = bytes(index & 0xFF for index in range(2500))
@@ -590,6 +677,28 @@ class ZmodemTests(unittest.TestCase):
                         stderr=subprocess.PIPE, timeout=10,
                     )
                     self.assertEqual(result.returncode, 1)
+
+    def test_command_line_rejects_invalid_arguments(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            source = Path(temporary) / "unused.bin"
+            source.write_bytes(b"unused")
+            cases = (
+                (ZMTX, ("-x", source.name), 1),
+                (ZMTX, ("-n", "-o", source.name), 1),
+                (ZMTX, (), 1),
+                (ZMRX, ("-x",), 1),
+                (ZMRX, ("-n", "-o"), 1),
+                (ZMRX, ("unexpected",), 1),
+                (ZMRX, ("-l",), 2),
+            )
+            for program, arguments, returncode in cases:
+                with self.subTest(program=program.name, arguments=arguments):
+                    result = subprocess.run(
+                        [str(program), *arguments], cwd=temporary,
+                        stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                        stderr=subprocess.PIPE, timeout=10,
+                    )
+                    self.assertEqual(result.returncode, returncode)
 
     def test_receiver_acknowledges_committed_position_and_ignores_length_estimate(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -865,6 +974,48 @@ class ZmodemTests(unittest.TestCase):
                 self.assertEqual(bytes(peer.byte() for _ in range(2)), b"OO")
                 stderr = process.communicate(timeout=10)[1]
                 self.assertEqual(process.returncode, 0, stderr.decode(errors="replace"))
+            finally:
+                remote.close()
+                if process.poll() is None:
+                    process.kill()
+                    process.wait()
+
+    def test_sender_retries_after_repeated_stale_init(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            source = Path(temporary) / "stale.bin"
+            source.write_bytes(b"stale initialization")
+            local, remote = socket.socketpair()
+            process = subprocess.Popen(
+                [str(ZMTX), source.name], cwd=temporary, stdin=local,
+                stdout=local, stderr=subprocess.PIPE,
+            )
+            local.close()
+            peer = Peer(remote)
+            try:
+                frame_type, _, _ = peer.header()
+                self.assertEqual(frame_type, ZRQINIT)
+                zrinit = hex_header(
+                    ZRINIT, header=bytes((ZRINIT, 0, 0, 0, 3)))
+                peer.send(zrinit)
+
+                frame_type, _, _ = peer.header()
+                self.assertEqual(frame_type, ZFILE)
+                peer.data()
+                peer.send(zrinit + zrinit)
+
+                frame_type, _, _ = peer.header()
+                self.assertEqual(frame_type, ZFILE)
+                peer.data()
+                peer.send(hex_header(ZRPOS, 0))
+
+                frame_type, position, _ = peer.header()
+                self.assertEqual((frame_type, position), (ZDATA, 0))
+                payload, frame_end = peer.data()
+                self.assertEqual((payload, frame_end),
+                                 (b"stale initialization", ZCRCE))
+                self.finish_sender(peer, process,
+                                   bytes((ZRINIT, 0, 0, 0, 3)),
+                                   len(payload))
             finally:
                 remote.close()
                 if process.poll() is None:

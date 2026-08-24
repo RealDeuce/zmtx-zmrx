@@ -10,7 +10,8 @@ reference_crc32(uint32_t crc,const uint8_t * data,size_t length)
 
 {
 	while (length-- > 0) {
-		crc = UPDCRC32(*data++,crc);
+		crc = crc32_byte_update(crc,*data);
+		data += 1U;
 	}
 	return crc;
 }
