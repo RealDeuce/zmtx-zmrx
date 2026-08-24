@@ -1,0 +1,102 @@
+name: Build and release
+
+on:
+  push:
+    branches:
+      - "**"
+    tags:
+      - "v[0-9]*"
+      - "[0-9]*"
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build with ${{ matrix.compiler }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        compiler:
+          - gcc
+          - clang
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v6
+
+      - name: Build
+        env:
+          CC: ${{ matrix.compiler }}
+          CFLAGS: -O2 -Wall -Wextra -Werror -pedantic-errors
+        run: make
+
+  release:
+    name: Package source release
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v6
+
+      - name: Create source archive
+        id: package
+        shell: bash
+        run: |
+          version=$(<VERSION)
+          tag_version=${GITHUB_REF_NAME#v}
+
+          if [[ "${tag_version}" != "${version}" ]]; then
+            echo "Tag ${GITHUB_REF_NAME} does not match VERSION ${version}" >&2
+            exit 1
+          fi
+
+          release_version=${version//./}
+          if [[ ! "${release_version}" =~ ^[0-9]+$ ]]; then
+            echo "VERSION must contain only digits and periods" >&2
+            exit 1
+          fi
+
+          zip_archive="zm${release_version}"
+          tar_archive="zmtx-zmrx-${version}"
+
+          git archive --format=zip --prefix="zmtx-zmrx/" \
+            --output="${zip_archive}.zip" "${GITHUB_SHA}"
+          git archive --format=tar --prefix="${tar_archive}/" "${GITHUB_SHA}" |
+            gzip -n -9 > "${tar_archive}.tar.gz"
+          sha256sum "${zip_archive}.zip" "${tar_archive}.tar.gz" > SHA256SUMS
+
+          echo "zip_archive=${zip_archive}" >> "${GITHUB_OUTPUT}"
+          echo "tar_archive=${tar_archive}" >> "${GITHUB_OUTPUT}"
+
+      - name: Retain packaged source as workflow artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ steps.package.outputs.tar_archive }}-source
+          path: |
+            ${{ steps.package.outputs.zip_archive }}.zip
+            ${{ steps.package.outputs.tar_archive }}.tar.gz
+            SHA256SUMS
+          if-no-files-found: error
+
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAR_ARCHIVE: ${{ steps.package.outputs.tar_archive }}
+          ZIP_ARCHIVE: ${{ steps.package.outputs.zip_archive }}
+        shell: bash
+        run: |
+          assets=("${ZIP_ARCHIVE}.zip" "${TAR_ARCHIVE}.tar.gz" SHA256SUMS)
+
+          if gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1; then
+            gh release upload "${GITHUB_REF_NAME}" "${assets[@]}" --clobber
+          else
+            gh release create "${GITHUB_REF_NAME}" "${assets[@]}" \
+              --verify-tag --generate-notes --title "${GITHUB_REF_NAME}"
+          fi
