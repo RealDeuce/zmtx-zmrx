@@ -25,6 +25,20 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 Special thanks to Jacques Mattheij, formerly of Mattheij Computer Service,
 and original author of zmtx/zmrx.
 
+1.03 release notes (24/08/26)
+
+Thirty-two years is probably long enough between releases. The sources are
+now under the 2-clause BSD license, with the old third-party notices kept
+intact. OpenBSD portability changes have been incorporated and the build now
+uses the compiler selected by make. The obsolete Unite! and SunOS 4 code has
+been removed in favour of strict C99 and POSIX.1-2001 interfaces.
+
+Compiler and linker errors have been fixed and the code builds without
+warnings from modern versions of Clang and GCC. Protocol bytes, CRC values,
+file sizes and offsets now use exact-width unsigned types with explicit wire
+byte order. Large-file offsets are requested where available. The README is
+now Markdown and GitHub Actions builds the sources and packages releases.
+
 1.02 release notes (18/07/94)
 
 Crash recovery now supported and the file date is set (which didn't happen
@@ -68,4 +82,3 @@ would like to send us a message use any of the possibilities below.
 Enjoy it and on to the next release
 
              Jacques Mattheij.
-

@@ -1,4 +1,3 @@
 /* the release version number as printed by the programs */
 
-#define VERSION "1.02"
-
+#define VERSION "1.03"

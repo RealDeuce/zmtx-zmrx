@@ -63,6 +63,15 @@ jobs:
             exit 1
           fi
 
+          awk -v version="${version}" '
+            BEGIN { heading = version " release notes (" }
+            index($0, heading) == 1 { found = 1 }
+            found && index($0, heading) != 1 &&
+              $0 ~ /^[0-9]+\.[0-9]+ release notes \(/ { exit }
+            found { print }
+            END { if (!found) exit 1 }
+          ' release.notes > RELEASE_NOTES
+
           zip_archive="zm${release_version}"
           tar_archive="zmtx-zmrx-${version}"
 
@@ -95,8 +104,11 @@ jobs:
           assets=("${ZIP_ARCHIVE}.zip" "${TAR_ARCHIVE}.tar.gz" SHA256SUMS)
 
           if gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1; then
+            gh release edit "${GITHUB_REF_NAME}" --notes-file RELEASE_NOTES \
+              --title "${GITHUB_REF_NAME}"
             gh release upload "${GITHUB_REF_NAME}" "${assets[@]}" --clobber
           else
             gh release create "${GITHUB_REF_NAME}" "${assets[@]}" \
-              --verify-tag --generate-notes --title "${GITHUB_REF_NAME}"
+              --verify-tag --notes-file RELEASE_NOTES \
+              --title "${GITHUB_REF_NAME}"
           fi
