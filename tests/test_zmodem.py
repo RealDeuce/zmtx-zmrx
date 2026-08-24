@@ -5,6 +5,7 @@ import socket
 import subprocess
 import tempfile
 import unittest
+import zlib
 from pathlib import Path
 
 
@@ -75,6 +76,21 @@ def hex_header(frame_type, position=0, *, header=None, parity=False):
 def data_subpacket(data, frame_end):
     check = crc16(data + bytes((frame_end,)))
     wire = escaped(data) + bytes((ZDLE, frame_end)) + escaped(check.to_bytes(2, "big"))
+    if frame_end == ZCRCW:
+        wire += bytes((XON,))
+    return wire
+
+
+def binary32_header(frame_type, position=0):
+    header = bytes((frame_type,)) + position.to_bytes(4, "little")
+    check = zlib.crc32(header) & 0xFFFFFFFF
+    return b"**\x18C" + escaped(header + check.to_bytes(4, "little"))
+
+
+def data_subpacket32(data, frame_end):
+    check = zlib.crc32(data + bytes((frame_end,))) & 0xFFFFFFFF
+    wire = escaped(data) + bytes((ZDLE, frame_end))
+    wire += escaped(check.to_bytes(4, "little"))
     if frame_end == ZCRCW:
         wire += bytes((XON,))
     return wire
@@ -617,6 +633,24 @@ class ZmodemTests(unittest.TestCase):
                     if process.poll() is None:
                         process.kill()
                         process.wait()
+
+    def test_receiver_consumes_oversized_crc32_subpacket(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            process, peer = self.start_receiver(temporary)
+            try:
+                info = b"a" * 8193
+                peer.send(binary32_header(ZFILE) +
+                          data_subpacket32(info, ZCRCW))
+                frame_type, position, _ = peer.header()
+                self.assertEqual((frame_type, position), (ZNAK, 0))
+                returncode, stderr = finish_receiver(peer, process)
+                self.assertEqual(returncode, 0,
+                                 stderr.decode(errors="replace"))
+            finally:
+                peer.sock.close()
+                if process.poll() is None:
+                    process.kill()
+                    process.wait()
 
     def test_receiver_skips_a_pathname_that_does_not_fit(self):
         with tempfile.TemporaryDirectory() as temporary:

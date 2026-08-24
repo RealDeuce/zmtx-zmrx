@@ -802,13 +802,16 @@ rx_32_data(uint8_t * p,size_t capacity,size_t * l)
 			return TIMEOUT;
 		}
 		if (c < 0x100) {
-			crc = UPDCRC32(c,crc);
 			if (*l < capacity && *l < ZMAXSPLEN) {
 				p[*l] = (uint8_t)c;
 				(*l)++;
 			}
 			else {
-				overflow = true;
+				if (!overflow) {
+					crc = crc32_update(crc,p,*l);
+					overflow = true;
+				}
+				crc = UPDCRC32(c,crc);
 			}
 			continue;
 		}
@@ -816,6 +819,9 @@ rx_32_data(uint8_t * p,size_t capacity,size_t * l)
 
 	sub_frame_type = c & 0xff;
 
+	if (!overflow) {
+		crc = crc32_update(crc,p,*l);
+	}
 	crc = UPDCRC32(sub_frame_type, crc);
 
 	crc = ~crc;
