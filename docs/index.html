@@ -1,0 +1,130 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="zmtx/zmrx: a compact, portable ZMODEM sender and receiver.">
+  <title>zmtx/zmrx — ZMODEM tools</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header class="hero">
+    <nav aria-label="Primary navigation">
+      <a class="wordmark" href="#top" aria-label="zmtx/zmrx home">zmtx<span>/</span>zmrx</a>
+      <div class="nav-links">
+        <a href="#about">About</a>
+        <a href="#history">History</a>
+        <a href="https://github.com/RealDeuce/zmtx-zmrx">Source</a>
+      </div>
+    </nav>
+
+    <div class="hero-copy" id="top">
+      <p class="eyebrow">ZMODEM for POSIX systems</p>
+      <h1>Small tools.<br><span>Solid transfers.</span></h1>
+      <p class="lede">
+        <strong>zmtx</strong> and <strong>zmrx</strong> are compact command-line
+        programs for sending and receiving files with the ZMODEM protocol.
+      </p>
+      <div class="actions">
+        <a class="button primary" href="https://github.com/RealDeuce/zmtx-zmrx/releases/latest">Get the latest release</a>
+        <a class="button secondary" href="https://github.com/RealDeuce/zmtx-zmrx">Browse the source</a>
+      </div>
+    </div>
+
+    <div class="terminal" aria-label="Example commands">
+      <div class="terminal-bar"><i></i><i></i><i></i></div>
+      <pre><code><span>$</span> zmtx archive.zip
+<span>$</span> zmrx
+
+<b># ZedZap and bounded windows</b>
+<span>$</span> zmtx -8 -w32K disk.img</code></pre>
+    </div>
+  </header>
+
+  <main>
+    <section class="about" id="about">
+      <div class="section-heading">
+        <p class="eyebrow">What it is</p>
+        <h2>A focused ZMODEM implementation</h2>
+      </div>
+      <div class="feature-grid">
+        <article>
+          <span class="feature-number">01</span>
+          <h3>Portable</h3>
+          <p>Strict C99 and POSIX.1-2001 source, tested with modern GCC and Clang on Linux, macOS and FreeBSD.</p>
+        </article>
+        <article>
+          <span class="feature-number">02</span>
+          <h3>Compatible</h3>
+          <p>Binary transfers, CRC16 and CRC32, crash recovery, streaming and non-streaming operation.</p>
+        </article>
+        <article>
+          <span class="feature-number">03</span>
+          <h3>Fast</h3>
+          <p>Buffered escaping, batched CRC32, sliding transmit windows and optional 4 KiB or 8 KiB ZedZap blocks.</p>
+        </article>
+      </div>
+      <p class="license-note">
+        The source is available under the
+        <a href="https://github.com/RealDeuce/zmtx-zmrx/blob/main/LICENSE">2-clause BSD license</a>.
+        Historical third-party notices remain intact.
+      </p>
+    </section>
+
+    <section class="history" id="history">
+      <div class="section-heading">
+        <p class="eyebrow">Where it came from</p>
+        <h2>More than thirty years of history</h2>
+      </div>
+      <ol class="timeline">
+        <li>
+          <time datetime="1994-07">July 1994</time>
+          <div>
+            <h3>The original release</h3>
+            <p>Jacques Mattheij of Mattheij Computer Service publishes zmtx/zmrx as a fresh, compact ZMODEM implementation and programmer-oriented protocol reference.</p>
+          </div>
+        </li>
+        <li>
+          <time datetime="2003">2003 onward</time>
+          <div>
+            <h3>A life inside Synchronet</h3>
+            <p>Synchronet develops a descendant of this code over many years. Its long history later provides a useful record of protocol fixes that can be brought back to the standalone package.</p>
+          </div>
+        </li>
+        <li>
+          <time datetime="2015-11-19">19 November 2015</time>
+          <div>
+            <h3>Copyright transferred</h3>
+            <p>
+              Jacques Mattheij transfers to Stephen Hurd his copyright and all
+              other rights he held in the released zmodem package and its
+              associated files, naming Fernando Toledo and Rob Swindell as
+              witnesses. The transfer is
+              <a href="https://gitlab.synchro.net/main/sbbs/-/commit/f42036b15b1b2fdc22c6282773f7d9334245e338">documented in Synchronet's source history</a>.
+            </p>
+          </div>
+        </li>
+        <li>
+          <time datetime="2026-08">August 2026</time>
+          <div>
+            <h3>The standalone project returns</h3>
+            <p>The original sources are preserved in Git, relicensed under BSD-2-Clause, modernized for current systems, and reunited with applicable fixes from their Synchronet descendant. Version 2.00 adds ZedZap, non-streaming transfers, sliding windows, performance improvements and extensive protocol tests.</p>
+          </div>
+        </li>
+      </ol>
+    </section>
+
+    <section class="download" id="download">
+      <p class="eyebrow">Ready to transfer?</p>
+      <h2>Download the source release.</h2>
+      <p>Every release includes traditional <code>zmXXX.zip</code> packaging, a versioned tarball and SHA-256 checksums.</p>
+      <a class="button primary" href="https://github.com/RealDeuce/zmtx-zmrx/releases">View all releases</a>
+    </section>
+  </main>
+
+  <footer>
+    <p><strong>zmtx/zmrx</strong> · maintained by Stephen Hurd</p>
+    <p>Questions or bug reports? <a href="mailto:zmodem@sjh.sh">zmodem@sjh.sh</a></p>
+  </footer>
+</body>
+</html>
