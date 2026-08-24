@@ -51,7 +51,7 @@
 #define	LF			UINT8_C(0x0a)
 #define	CR			UINT8_C(0x0d)
 #define	XON			UINT8_C(0x11)
-#define	XOFF		UINT8_C(0x13)
+#define	XOFF			UINT8_C(0x13)
 #define	NAK			UINT8_C(0x15)
 #define	CAN			UINT8_C(0x18)
 
