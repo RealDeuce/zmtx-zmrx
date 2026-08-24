@@ -7,32 +7,39 @@ through advertising slogans.
 
 ## License
 
-Copyright (c) 1994 Stephen Hurd
-All rights reserved.
-
-Redistribution and use in source and binary forms, with or without
-modification, are permitted provided that the following conditions are met:
-
-1. Redistributions of source code must retain the above copyright notice,
-   this list of conditions and the following disclaimer.
-
-2. Redistributions in binary form must reproduce the above copyright notice,
-   this list of conditions and the following disclaimer in the documentation
-   and/or other materials provided with the distribution.
-
-THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
-AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
-DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
-FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
-DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
-SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
-CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
-OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
-OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+zmtx/zmrx is available under the [2-clause BSD license](LICENSE).
 
 Special thanks to Jacques Mattheij, formerly of Mattheij Computer Service,
 and original author of zmtx/zmrx.
+
+## Building and installation
+
+Build and test with BSD make, GNU make, or another compatible implementation:
+
+```sh
+make
+make check
+```
+
+The `install` target installs `zmtx` and `zmrx` under `/usr/local/bin` and
+their manual pages under `/usr/local/share/man/man1`. The paths and install
+tools are overridable; for example, a staged package installation can use:
+
+```sh
+make prefix=/usr DESTDIR=/tmp/zmtx-package install
+make prefix=/usr DESTDIR=/tmp/zmtx-package uninstall
+```
+
+Use `make install-strip` to strip only the installed copies of the binaries.
+FreeBSD ports may instead include stripping in `BSD_INSTALL_PROGRAM`, in which
+case the regular `install` target honors it.
+
+`exec_prefix`, `bindir`, `mandir`, `INSTALL`, `INSTALL_PROGRAM`,
+`INSTALL_DATA`, `MKDIR_P`, and `PYTHON` may also be overridden. Uppercase
+`PREFIX`, `BINDIR`, `MANDIR`, and `MKDIR` aliases are provided for BSD
+makefiles; FreeBSD ports' `BSD_INSTALL_PROGRAM` and `BSD_INSTALL_MAN` are used
+as fallbacks. The `uninstall` target removes only the four files installed by
+`install` and leaves their containing directories intact.
 
 ## Transfer modes
 
