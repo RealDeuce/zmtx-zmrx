@@ -36,8 +36,10 @@
  * zmodem primitives and other code common to zmtx and zmrx
  */
 
+#include <stdlib.h>
 #include <stdio.h>
 #include <termios.h>
+#include <unistd.h>
 #include <signal.h>
 #ifdef UNITE
 #include <sys/select.h>
@@ -1309,5 +1311,4 @@ rx_header_and_check(int timeout)
 
 	return type;
 }
-
 

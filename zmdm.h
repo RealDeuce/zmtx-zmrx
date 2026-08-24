@@ -43,6 +43,7 @@
 #define EXTERN extern
 #endif
 
+
 #include <errno.h>
 
 #define TRUE  1
@@ -97,8 +98,16 @@ tx_hheader(unsigned char * buf,int n);
 void
 tx_bheader(unsigned char * buf,int n);
 
+int rx_poll(void);
+void rx_purge(void);
+inline int rx_raw(int);
+
+void tx_data(int, unsigned char *, int);
+void tx_header(unsigned char *);
+void tx_hex_header(unsigned char *);
+void tx_raw(int);
+
 int
 rx_header(int to);												/* receive any header with timeout in milliseconds */
 
 #endif
-

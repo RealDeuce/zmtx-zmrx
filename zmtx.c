@@ -36,6 +36,7 @@
 #include <stdio.h>
 #include <fcntl.h>
 #include <sys/stat.h>
+#include <stdlib.h>
 #include <string.h>
 #include <time.h>
 #include "version.h"
@@ -84,7 +85,7 @@ show_progress(char * name,FILE * fp)
 
 	cps = ftell(fp) / duration;
 
-	fprintf(stderr,"zmtx: sending file \"%s\" %8ld bytes (%3d %%/%5d cps)           \r",
+	fprintf(stderr,"sending file \"%s\" %8ld bytes (%3d %%/%5d cps)\r",
 		name,ftell(fp),percentage,cps);
 }
 
@@ -168,7 +169,7 @@ send_from(char * name,FILE * fp)
 		while (rx_poll()) {
 			int type;
 			int c;
-			c = rx_raw();
+			c = rx_raw(1000);
 			if (c == ZPAD) {
 				type = rx_header(1000);
 				if (type != TIMEOUT && type != ACK) {
@@ -220,7 +221,7 @@ send_file(char * name)
 		if (opt_v) {
 			fprintf(stderr,"zmtx: can't open file %s\n",name);
 		}
-		return;
+		return FALSE;
 	}
 
 	fstat(fileno(fp),&s);
@@ -315,7 +316,7 @@ send_file(char * name)
  	 * modification date
 	 */
 
-	sprintf(p,"%lo ",s.st_mtime);
+	sprintf(p,"%llo ",(long long)s.st_mtime);
 
 	p += strlen(p);
 
@@ -376,7 +377,7 @@ send_file(char * name)
 			if (opt_v) {
 				fprintf(stderr,"zmtx: skipped file \"%s\"                       \n",name);
 			}
-			return;
+			return FALSE;
 		}
 
 	} while (type != ZRPOS);
@@ -641,4 +642,3 @@ main(int argc,char ** argv)
 
 	return 0;
 }
-

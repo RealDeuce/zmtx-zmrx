@@ -1,6 +1,6 @@
 CC=gcc
 #CFLAGS=-O -DUNITE
-CFLAGS=-O -DSUNOS4
+CFLAGS += -DSUNOS4
 
 all:	zmtx zmrx
 
@@ -19,5 +19,4 @@ crctab.o:	crctab.c
 clean:
 	rm *.o
 	rm zmtx zmrx
-
 

@@ -36,6 +36,7 @@
 #include <stdio.h>
 #include <fcntl.h>
 #include <sys/stat.h>
+#include <stdlib.h>
 #include <string.h>
 #include <time.h>
 #include <utime.h>
@@ -89,7 +90,7 @@ show_progress(char * name,FILE * fp)
 
 	cps = ftell(fp) / duration;
 
-	fprintf(stderr,"zmrx: receiving file \"%s\" %8ld bytes (%3d %%/%5d cps)           \r",
+	fprintf(stderr,"receiving file \"%s\" %8ld bytes (%3d %%/%5d cps)\r",
 		name,ftell(fp),percentage,cps);
 }
 
@@ -242,7 +243,7 @@ receive_file()
 	}
 
 	if (opt_v) {
-		fprintf(stderr,"zmrx: receiving file \"%s\"\r",name);
+		fprintf(stderr,"receiving file \"%s\"\r",name);
 	}
 
 	sscanf(rx_data_subpacket + strlen(rx_data_subpacket) + 1,
@@ -361,7 +362,7 @@ receive_file()
 	 */
 
 	if (opt_v) {
-		fprintf(stderr,"zmrx: received file \"%s\"                 \n",name);
+		fprintf(stderr,"zmrx: received file \"%s\"\n",name);
 	}
 }
 
@@ -557,12 +558,12 @@ main(int argc,char ** argv)
 	{
 		int c;
 		do {
-			c = rx_raw();
+			c = rx_raw(1000);
 		} while (c != 'O' && c != TIMEOUT);
 
 		if (c != TIMEOUT) {
 			do {
-				c = rx_raw();
+				c = rx_raw(1000);
 			} while (c != 'O' && c != TIMEOUT);
 		}
 	}
@@ -577,4 +578,3 @@ main(int argc,char ** argv)
 
 	return 0;		/* to stop the compiler from complaining */
 }
-
