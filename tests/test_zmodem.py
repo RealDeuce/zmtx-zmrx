@@ -972,10 +972,10 @@ class ZmodemTests(unittest.TestCase):
             payload = bytes(index & 0xFF for index in range(1500))
             source = Path(temporary) / "future-ack.bin"
             source.write_bytes(payload)
-            process, peer, zrinit = self.start_sender(
+            process, peer, zrinit = self.begin_sender(
                 temporary, source.name, "-d", "-w4K")
             try:
-                peer.send(hex_header(ZACK, 5000))
+                peer.send(hex_header(ZRPOS, 0) + hex_header(ZACK, 5000))
                 frame_type, position, _ = peer.header()
                 self.assertEqual((frame_type, position), (ZDATA, 0))
                 chunk, frame_end = peer.data()
