@@ -314,7 +314,7 @@ tx_zrinit(void)
 }
 
 static bool
-parse_mdate(const char *text,time_t *value)
+parse_mdate(const char * restrict text,time_t * restrict value)
 
 {
 	char * end;

@@ -19,6 +19,7 @@ removing it or documenting its necessity, risks, and verification controls.
 | HI-006 | Generated lookup data | Should derived CRC slicing tables be immutable generated data rather than initialized mutable state? | Resolved; the slicing tables are immutable generated data, their generator is tracked, and CRC equivalence tests cover aligned and unaligned lengths. |
 | HI-007 | Application state | Must sender and receiver process state also be instance-owned? | Open; protocol state is instance-owned and reentrant, while command-line application state remains file-local for this single-session implementation. |
 | HI-008 | Best-effort cleanup | Which cleanup and metadata operations must affect the process result? | Open; close/flush failures on the active received file affect transfer status, while terminal restoration, emergency cleanup, input close, and timestamp-setting remain best effort. |
+| HI-009 | Restricted pointers | Where can non-aliasing be established strongly enough to use C99 `restrict`? | Resolved; qualifiers are limited to independently owned protocol state, transmit sources, receive destinations and results, POSIX adapter buffers, file-read outputs, and parser text/results. The public API documents its no-alias preconditions, and every in-tree call site passes distinct storage. Single-pointer functions and pointer values merely stored or forwarded remain unqualified. |
 
 ## Initial reassessment
 

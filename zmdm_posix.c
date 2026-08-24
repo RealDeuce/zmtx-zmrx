@@ -75,8 +75,8 @@ wait_for_input(int fd,int timeout_ms)
 }
 
 static int
-posix_read(void * context,uint8_t * buffer,size_t capacity,size_t * count,
-    int timeout_ms)
+posix_read(void * context,uint8_t * restrict buffer,size_t capacity,
+    size_t * restrict count,int timeout_ms)
 {
 	struct zmodem_posix_io * io = context;
 	ssize_t result;
@@ -140,7 +140,7 @@ posix_flush(void * context)
 }
 
 static int
-posix_write(void * context,const uint8_t * buffer,size_t length)
+posix_write(void * context,const uint8_t * restrict buffer,size_t length)
 {
 	struct zmodem_posix_io * io = context;
 

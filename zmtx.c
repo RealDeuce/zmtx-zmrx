@@ -114,8 +114,8 @@ file_position(int file_fd,off_t * position)
 }
 
 static bool
-read_file_block(int file_fd,uint8_t * buffer,size_t capacity,size_t * count,
-    bool * end_of_file)
+read_file_block(int file_fd,uint8_t * restrict buffer,size_t capacity,
+    size_t * restrict count,bool * restrict end_of_file)
 {
 	size_t used = 0U;
 
@@ -196,7 +196,7 @@ reduce_subpacket_size(void)
 }
 
 static bool
-parse_window_size(const char * text,uint32_t * value)
+parse_window_size(const char * restrict text,uint32_t * restrict value)
 
 {
 	char * end;

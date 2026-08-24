@@ -50,7 +50,8 @@ enum tx_class {
 };
 
 int
-zmodem_init(struct zmodem * zmodem,const struct zmodem_io * io)
+zmodem_init(struct zmodem * restrict zmodem,
+    const struct zmodem_io * restrict io)
 {
 	if ((zmodem == NULL) || (io == NULL) || (io->read == NULL) ||
 	    (io->write == NULL) || (io->flush == NULL) || (io->poll == NULL) ||
@@ -196,7 +197,8 @@ tx_hex(struct zmodem * zmodem,int h)
 }
 
 int
-tx_hex_header(struct zmodem * zmodem,const uint8_t * p)
+tx_hex_header(struct zmodem * restrict zmodem,
+    const uint8_t * restrict p)
 
 {
 	size_t i;
@@ -236,7 +238,8 @@ tx_hex_header(struct zmodem * zmodem,const uint8_t * p)
 }
 
 static int
-tx_bin32_header(struct zmodem * zmodem,const uint8_t * p)
+tx_bin32_header(struct zmodem * restrict zmodem,
+    const uint8_t * restrict p)
 
 {
 	size_t i;
@@ -271,7 +274,8 @@ tx_bin32_header(struct zmodem * zmodem,const uint8_t * p)
 }
 
 static int
-tx_bin16_header(struct zmodem * zmodem,const uint8_t * p)
+tx_bin16_header(struct zmodem * restrict zmodem,
+    const uint8_t * restrict p)
 
 {
 	size_t i;
@@ -305,7 +309,7 @@ tx_bin16_header(struct zmodem * zmodem,const uint8_t * p)
 }
 
 int
-tx_header(struct zmodem * zmodem,const uint8_t * p)
+tx_header(struct zmodem * restrict zmodem,const uint8_t * restrict p)
 
 {
 	if (zmodem->can_fcs_32 && zmodem->want_fcs_32) {
@@ -318,7 +322,8 @@ tx_header(struct zmodem * zmodem,const uint8_t * p)
 }
 
 static void
-buffer_raw(struct zmodem * zmodem,uint8_t c,size_t * used,int * previous)
+buffer_raw(struct zmodem * restrict zmodem,uint8_t c,
+    size_t * restrict used,int * restrict previous)
 
 {
 	zmodem->tx_data_wire[*used] = c;
@@ -327,8 +332,8 @@ buffer_raw(struct zmodem * zmodem,uint8_t c,size_t * used,int * previous)
 }
 
 static void
-buffer_tx(struct zmodem * zmodem,uint8_t c,size_t * used,int * previous,
-    unsigned active)
+buffer_tx(struct zmodem * restrict zmodem,uint8_t c,
+    size_t * restrict used,int * restrict previous,unsigned active)
 
 {
 	if (tx_byte_needs_escape(zmodem,c,*previous,active)) {
@@ -341,8 +346,8 @@ buffer_tx(struct zmodem * zmodem,uint8_t c,size_t * used,int * previous,
 }
 
 int
-tx_data(struct zmodem * zmodem,uint8_t sub_frame_type,const uint8_t * p,
-    size_t l)
+tx_data(struct zmodem * restrict zmodem,uint8_t sub_frame_type,
+    const uint8_t * restrict p,size_t l)
 
 {
 	int previous = zmodem->last_sent;
@@ -605,7 +610,8 @@ rx(struct zmodem * zmodem,int timeout_ms)
 }
 
 static int
-rx_crc16(struct zmodem * zmodem,int timeout_ms,uint16_t * value)
+rx_crc16(struct zmodem * restrict zmodem,int timeout_ms,
+    uint16_t * restrict value)
 
 {
 	int high;
@@ -625,7 +631,8 @@ rx_crc16(struct zmodem * zmodem,int timeout_ms,uint16_t * value)
 }
 
 static int
-rx_crc32(struct zmodem * zmodem,int timeout_ms,uint32_t * value)
+rx_crc32(struct zmodem * restrict zmodem,int timeout_ms,
+    uint32_t * restrict value)
 
 {
 	int c;
@@ -656,7 +663,8 @@ rx_crc32(struct zmodem * zmodem,int timeout_ms,uint32_t * value)
  */
 
 static int
-rx_32_data(struct zmodem * zmodem,uint8_t * p,size_t capacity,size_t * l)
+rx_32_data(struct zmodem * restrict zmodem,uint8_t * restrict p,
+    size_t capacity,size_t * restrict l)
 
 {
 	int c;
@@ -720,7 +728,8 @@ rx_32_data(struct zmodem * zmodem,uint8_t * p,size_t capacity,size_t * l)
 }
 
 static int
-rx_16_data(struct zmodem * zmodem,uint8_t * p,size_t capacity,size_t * l)
+rx_16_data(struct zmodem * restrict zmodem,uint8_t * restrict p,
+    size_t capacity,size_t * restrict l)
 
 {
 	int c;
@@ -778,8 +787,8 @@ rx_16_data(struct zmodem * zmodem,uint8_t * p,size_t capacity,size_t * l)
 }
 
 int
-rx_data(struct zmodem * zmodem,uint8_t * p,size_t capacity,size_t * l,
-    uint8_t * frame_end)
+rx_data(struct zmodem * restrict zmodem,uint8_t * restrict p,
+    size_t capacity,size_t * restrict l,uint8_t * restrict frame_end)
 
 {
 	int sub_frame_type;

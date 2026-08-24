@@ -103,18 +103,26 @@ struct zmodem {
 	uint8_t tx_data_wire[ZMODEM_TX_DATA_WIRE_CAPACITY];
 };
 
-int zmodem_init(struct zmodem *,const struct zmodem_io *);
+/*
+ * Pointer arguments qualified with restrict designate independent storage for
+ * the duration of the call.  In particular, receive destinations and result
+ * objects must not overlap one another or protocol state modified by rx_data.
+ * Transmit sources must not overlap protocol storage modified while encoding.
+ */
+int zmodem_init(struct zmodem * restrict,const struct zmodem_io * restrict);
 int rx_poll(struct zmodem *);
 int rx_purge(struct zmodem *);
 int rx_raw(struct zmodem *,int);
-int rx_data(struct zmodem *,uint8_t *,size_t,size_t *,uint8_t *);
+int rx_data(struct zmodem * restrict,uint8_t * restrict,size_t,
+    size_t * restrict,uint8_t * restrict);
 int rx_header_and_check(struct zmodem *,int);
 uint32_t zmodem_header_position(const uint8_t *);
 void zmodem_set_header_position(uint8_t *,uint32_t);
-int tx_data(struct zmodem *,uint8_t,const uint8_t *,size_t);
+int tx_data(struct zmodem * restrict,uint8_t,
+    const uint8_t * restrict,size_t);
 int tx_flush(struct zmodem *);
-int tx_header(struct zmodem *,const uint8_t *);
-int tx_hex_header(struct zmodem *,const uint8_t *);
+int tx_header(struct zmodem * restrict,const uint8_t * restrict);
+int tx_hex_header(struct zmodem * restrict,const uint8_t * restrict);
 int tx_pos_header(struct zmodem *,uint8_t,uint32_t);
 int tx_raw(struct zmodem *,int);
 int tx_znak(struct zmodem *);
