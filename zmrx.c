@@ -70,6 +70,7 @@ char * line = NULL;												/* device to use for io */
 bool opt_v = false;												/* show progress output */
 bool opt_d = false;												/* show debug output */
 bool opt_q = false;
+bool opt_s = false;
 bool junk_pathnames = false;										/* junk incoming path names or keep them */
 uint8_t rx_data_subpacket[ZMAXSPLEN];
 
@@ -232,7 +233,15 @@ static int
 tx_zrinit(void)
 
 {
-	uint8_t zrinit_header[] = { ZRINIT, 0, 0, 0, 4 | ZF0_CANFDX | ZF0_CANOVIO | ZF0_CANFC32 };
+	uint8_t zrinit_header[] = {
+		ZRINIT, 0, 0, 0, ZF0_CANBRK | ZF0_CANFDX | ZF0_CANOVIO | ZF0_CANFC32
+	};
+
+	if (opt_s) {
+		zrinit_header[ZP0] = (uint8_t)ZMAXSPLEN;
+		zrinit_header[ZP1] = (uint8_t)(ZMAXSPLEN >> 8);
+		zrinit_header[ZF0] &= (uint8_t)~ZF0_CANOVIO;
+	}
 
 	return tx_hex_header(zrinit_header);
 }
@@ -566,6 +575,7 @@ usage(void)
 	printf("	-d          debug output\n");
 	printf("	-v          verbose output\n");
 	printf("	-q          quiet\n");
+	printf("	-s          request non-streaming transfers\n");
 	printf("	(only one of -n -c or -p may be specified)\n");
 
 	cleanup();
@@ -591,6 +601,7 @@ main(int argc,char ** argv)
 				OPT_BOOL('D',opt_d);
 				OPT_BOOL('V',opt_v);
 				OPT_BOOL('Q',opt_q);
+				OPT_BOOL('S',opt_s);
 
 				OPT_BOOL('N',management_newer);
 				OPT_BOOL('O',management_clobber);

@@ -4,7 +4,7 @@ zmrx \- receive file using ZMODEM protocol
 .SH SYNOPSIS
 .B zmrx
 [
-.B \-jnopdvq
+.B \-sjnopdvq
 ] [
 .B \-l\fIline\fP
 ]
@@ -20,6 +20,11 @@ and writes
 It accepts standard 1 KiB data subpackets and the 4 KiB and 8 KiB
 subpackets commonly called ZedZap.
 .SH OPTIONS
+.TP
+.B \-s
+Request non-streaming operation.  The receiver clears its overlapped I/O
+capability and advertises an 8 KiB receive buffer, causing a conforming sender
+to wait for an acknowledgement after every data subpacket.
 .TP
 .B \-l\fIline\fP
 File (typically a tty) to use for the transfer instead

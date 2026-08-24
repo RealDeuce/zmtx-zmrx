@@ -4,7 +4,7 @@ zmtx \- transmit file using ZMODEM protocol
 .SH SYNOPSIS
 .B zmtx
 [
-.B \-48nopdv
+.B \-48snopdv
 ] [
 .B \-l\fIline\fP
 ]
@@ -26,6 +26,11 @@ standard 1 KiB subpacket and increases the size after clean transfers.
 .B \-8
 Use ZedZap data subpackets up to 8 KiB.  This extension is not negotiated;
 use it only with a receiver known to accept ZedZap subpackets.
+.TP
+.B \-s
+Disable streaming and wait for a committed-position acknowledgement after
+every data subpacket.  This mode is also selected automatically when the
+receiver does not advertise overlapped I/O capability.
 .TP
 .B \-l\fIline\fP
 File (typically a tty) to use for the transfer instead

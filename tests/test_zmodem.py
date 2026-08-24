@@ -160,6 +160,8 @@ class Peer:
         received_crc = (self._data_byte() << 8) | self._data_byte()
         if received_crc != crc16(bytes(payload) + bytes((frame_end,))):
             raise AssertionError("bad CRC in received data subpacket")
+        if frame_end == ZCRCW and self.byte() != XON:
+            raise AssertionError("missing XON after ZCRCW subpacket")
         return bytes(payload), frame_end
 
 
@@ -219,6 +221,36 @@ class ZmodemTests(unittest.TestCase):
         frame_type, _, _ = peer.header()
         self.assertEqual(frame_type, ZRINIT)
         return process, peer
+
+    def start_sender(self, cwd, name, *options, flags=3, buffer_size=0):
+        local, remote = socket.socketpair()
+        process = subprocess.Popen(
+            [str(ZMTX), *options, name], cwd=cwd, stdin=local, stdout=local,
+            stderr=subprocess.PIPE,
+        )
+        local.close()
+        peer = Peer(remote)
+        frame_type, _, _ = peer.header()
+        self.assertEqual(frame_type, ZRQINIT)
+        zrinit = bytes((ZRINIT, buffer_size & 0xFF,
+                        (buffer_size >> 8) & 0xFF, 0, flags))
+        peer.send(hex_header(ZRINIT, header=zrinit))
+        frame_type, _, _ = peer.header()
+        self.assertEqual(frame_type, ZFILE)
+        peer.data()
+        peer.send(hex_header(ZRPOS, 0))
+        return process, peer, zrinit
+
+    def finish_sender(self, peer, process, zrinit, expected_size):
+        frame_type, position, _ = peer.header()
+        self.assertEqual((frame_type, position), (ZEOF, expected_size))
+        peer.send(hex_header(ZRINIT, header=zrinit))
+        frame_type, _, _ = peer.header()
+        self.assertEqual(frame_type, ZFIN)
+        peer.send(hex_header(ZFIN))
+        self.assertEqual(bytes(peer.byte() for _ in range(2)), b"OO")
+        stderr = process.communicate(timeout=10)[1]
+        self.assertEqual(process.returncode, 0, stderr.decode(errors="replace"))
 
     def test_boundary_sized_self_transfers(self):
         sizes = (0, 1, 1023, 1024, 1025, 4097)
@@ -293,6 +325,111 @@ class ZmodemTests(unittest.TestCase):
                 self.assertEqual(process.returncode, 0, stderr.decode(errors="replace"))
             finally:
                 remote.close()
+                if process.poll() is None:
+                    process.kill()
+                    process.wait()
+
+    def test_receiver_requests_non_streaming_mode(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            local, remote = socket.socketpair()
+            process = subprocess.Popen(
+                [str(ZMRX), "-s"], cwd=temporary, stdin=local, stdout=local,
+                stderr=subprocess.PIPE,
+            )
+            local.close()
+            peer = Peer(remote)
+            try:
+                frame_type, _, header = peer.header()
+                self.assertEqual(frame_type, ZRINIT)
+                self.assertEqual(int.from_bytes(header[1:3], "little"), 8192)
+                self.assertEqual(header[4] & 0x02, 0)
+                returncode, stderr = finish_receiver(peer, process)
+                self.assertEqual(returncode, 0, stderr.decode(errors="replace"))
+            finally:
+                remote.close()
+                if process.poll() is None:
+                    process.kill()
+                    process.wait()
+
+    def test_sender_waits_for_each_non_streaming_ack(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            payload = bytes(index & 0xFF for index in range(2500))
+            source = Path(temporary) / "nonstream.bin"
+            source.write_bytes(payload)
+            process, peer, zrinit = self.start_sender(
+                temporary, source.name, "-s")
+            try:
+                offset = 0
+                for expected_length in (1024, 1024, 452):
+                    frame_type, position, _ = peer.header()
+                    self.assertEqual((frame_type, position), (ZDATA, offset))
+                    chunk, frame_end = peer.data()
+                    self.assertEqual((len(chunk), frame_end),
+                                     (expected_length, ZCRCW))
+                    self.assertEqual(chunk, payload[offset:offset + expected_length])
+                    offset += expected_length
+
+                    peer.sock.settimeout(0.05)
+                    with self.assertRaises(socket.timeout):
+                        peer.byte()
+                    peer.sock.settimeout(10)
+                    peer.send(hex_header(ZACK, offset))
+
+                self.finish_sender(peer, process, zrinit, len(payload))
+            finally:
+                peer.sock.close()
+                if process.poll() is None:
+                    process.kill()
+                    process.wait()
+
+    def test_sender_automatically_honors_missing_overlap_capability(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            payload = b"automatic non-streaming"
+            source = Path(temporary) / "automatic.bin"
+            source.write_bytes(payload)
+            process, peer, zrinit = self.start_sender(
+                temporary, source.name, flags=1)
+            try:
+                frame_type, position, _ = peer.header()
+                self.assertEqual((frame_type, position), (ZDATA, 0))
+                chunk, frame_end = peer.data()
+                self.assertEqual((chunk, frame_end), (payload, ZCRCW))
+                peer.send(hex_header(ZACK, len(payload)))
+                self.finish_sender(peer, process, zrinit, len(payload))
+            finally:
+                peer.sock.close()
+                if process.poll() is None:
+                    process.kill()
+                    process.wait()
+
+    def test_sender_honors_finite_receiver_buffer(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            payload = bytes(index & 0xFF for index in range(4000))
+            source = Path(temporary) / "bounded.bin"
+            source.write_bytes(payload)
+            process, peer, zrinit = self.start_sender(
+                temporary, source.name, "-4", buffer_size=1500)
+            try:
+                offset = 0
+                expected = (
+                    (1024, ZCRCG), (476, ZCRCW),
+                    (1500, ZCRCW), (1000, ZCRCE),
+                )
+                for expected_length, expected_end in expected:
+                    if offset in (0, 1500, 3000):
+                        frame_type, position, _ = peer.header()
+                        self.assertEqual((frame_type, position), (ZDATA, offset))
+                    chunk, frame_end = peer.data()
+                    self.assertEqual((len(chunk), frame_end),
+                                     (expected_length, expected_end))
+                    self.assertEqual(chunk, payload[offset:offset + expected_length])
+                    offset += expected_length
+                    if frame_end == ZCRCW:
+                        peer.send(hex_header(ZACK, offset))
+
+                self.finish_sender(peer, process, zrinit, len(payload))
+            finally:
+                peer.sock.close()
                 if process.poll() is None:
                     process.kill()
                     process.wait()

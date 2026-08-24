@@ -43,6 +43,13 @@ while the transfer remains error-free. Because ZedZap has no wire-level
 negotiation, these options should be used only with compatible receivers.
 `zmrx` accepts all three sizes automatically.
 
+`zmtx -s` waits for a committed-position acknowledgement after every data
+subpacket. `zmrx -s` requests the same behavior from a conforming sender.
+The transmitter also selects this conservative mode automatically when the
+receiver does not advertise overlapped I/O. If a streaming receiver advertises
+a finite buffer, `zmtx` ends and acknowledges each segment before that buffer
+would be exceeded.
+
 ## Intended audience
 
 the intended audience of this document are programmers looking for

@@ -60,8 +60,10 @@ enum send_result {
 char * line = NULL;												/* device to use for io */
 bool opt_v = false;											/* show progress output */
 bool opt_d = false;											/* show debug output */
+bool opt_s = false;											/* disable streaming */
 size_t subpacket_size = ZBLOCKLEN;							/* current data subpacket size */
 size_t max_subpacket_size = ZBLOCKLEN;						/* selected maximum data subpacket size */
+uint16_t receiver_buffer_size;
 int n_files_remaining;
 uint8_t tx_data_subpacket[ZMAXSPLEN];
 
@@ -79,6 +81,8 @@ parse_zrinit(void)
 	escape_all_control_characters = (rxd_header[ZF0] & ZF0_ESCCTL) != 0;
 	escape_8th_bit = (rxd_header[ZF0] & ZF0_ESC8) != 0;
 	use_variable_headers = (rxd_header[ZF1] & ZF1_CANVHDR) != 0;
+	receiver_buffer_size = (uint16_t)rxd_header[ZP0] |
+	    (uint16_t)((uint16_t)rxd_header[ZP1] << 8);
 }
 
 static void
@@ -157,29 +161,34 @@ int
 send_from(char * name,FILE * fp)
 
 {
+	bool frame_open = false;
+	bool stop_after_ack;
+	bool wait_each_block = opt_s || !can_overlap_io;
 	size_t n;
+	size_t read_size;
+	size_t segment_sent = 0;
 	off_t position;
 	uint8_t zdata_frame[] = { ZDATA, 0, 0, 0, 0 };
-
-	/*
- 	 * put the file position in the ZDATA frame
-	 */
-
-	position = ftello(fp);
-	if (position < 0 || (uintmax_t)position > UINT32_MAX) {
-		return ZFERR;
-	}
-	zmodem_set_header_position(zdata_frame,(uint32_t)position);
-
-	if (tx_header(zdata_frame) != 0) {
-		return ZFERR;
-	}
 	/*
 	 * send the data in the file
 	 */
 
 	for (;;) {
 		uint8_t frame_end;
+		uint32_t wire_position;
+
+		position = ftello(fp);
+		if (position < 0 || (uintmax_t)position > UINT32_MAX) {
+			return ZFERR;
+		}
+		wire_position = (uint32_t)position;
+		if (!frame_open) {
+			zmodem_set_header_position(zdata_frame,wire_position);
+			if (tx_header(zdata_frame) != 0) {
+				return ZFERR;
+			}
+			frame_open = true;
+		}
 
 		if (opt_v) {
 			show_progress(name,fp);
@@ -188,22 +197,38 @@ send_from(char * name,FILE * fp)
 		/*
 		 * read a block from the file
 		 */
-		position = ftello(fp);
-		if (position < 0 || (uintmax_t)position > UINT32_MAX) {
-			(void)tx_pos_header(ZFERR,UINT32_C(0));
-			return ZFERR;
+		read_size = subpacket_size;
+		if (receiver_buffer_size != 0 &&
+		    read_size > (size_t)receiver_buffer_size - segment_sent) {
+			read_size = (size_t)receiver_buffer_size - segment_sent;
 		}
-		n = fread(tx_data_subpacket,1,subpacket_size,fp);
+		n = fread(tx_data_subpacket,1,read_size,fp);
 		if (ferror(fp)) {
-			(void)tx_pos_header(ZFERR,(uint32_t)position);
+			(void)tx_pos_header(ZFERR,wire_position);
 			return ZFERR;
 		}
-		if (n > UINT32_MAX || (uintmax_t)position > UINT32_MAX - (uint32_t)n) {
-			(void)tx_pos_header(ZFERR,(uint32_t)position);
+		if (n > UINT32_MAX || wire_position > UINT32_MAX - (uint32_t)n) {
+			(void)tx_pos_header(ZFERR,wire_position);
 			return ZFERR;
 		}
 		position += (off_t)n;
-		frame_end = n < subpacket_size ? ZCRCE : ZCRCG;
+		stop_after_ack = wait_each_block && n < read_size;
+		if (n == 0) {
+			frame_end = ZCRCE;
+		}
+		else if (wait_each_block) {
+			frame_end = ZCRCW;
+		}
+		else if (n < read_size) {
+			frame_end = ZCRCE;
+		}
+		else if (receiver_buffer_size != 0 &&
+		    segment_sent + n == receiver_buffer_size) {
+			frame_end = ZCRCW;
+		}
+		else {
+			frame_end = ZCRCG;
+		}
 		if (tx_data(frame_end,tx_data_subpacket,n) != 0) {
 			return ZFERR;
 		}
@@ -213,6 +238,30 @@ send_from(char * name,FILE * fp)
 				fprintf(stderr,"end of file\n");
 			}
 			return ZACK;
+		}
+		segment_sent += n;
+
+		if (frame_end == ZCRCW) {
+			int type;
+
+			for (;;) {
+				type = rx_header(10000);
+				if (type != ZACK ||
+				    zmodem_header_position(rxd_header) == (uint32_t)position) {
+					break;
+				}
+			}
+			if (type != ZACK) {
+				return type;
+			}
+			frame_open = false;
+			segment_sent = 0;
+			increase_subpacket_size();
+			if (stop_after_ack) {
+				current_file_size = position;
+				return ZACK;
+			}
+			continue;
 		}
 
 		/* 
@@ -538,6 +587,7 @@ usage(void)
 	printf("	-lline      line to use for io\n");
 	printf("	-4          use ZedZap 4 KiB data subpackets\n");
 	printf("	-8          use ZedZap 8 KiB data subpackets\n");
+	printf("	-s          wait for an acknowledgement after each block\n");
 	printf("	-n    		transfer if source is newer\n");
 	printf("	-o    	    overwrite if exists\n");
 	printf("	-p          protect (don't overwrite if exists)\n");
@@ -573,6 +623,7 @@ main(int argc,char ** argv)
 					break;
 				OPT_BOOL('D',opt_d);
 				OPT_BOOL('V',opt_v);
+				OPT_BOOL('S',opt_s);
 
 				OPT_BOOL('N',management_newer);
 				OPT_BOOL('O',management_clobber);
@@ -667,6 +718,7 @@ main(int argc,char ** argv)
 		fprintf(stderr,"receiver %s escaped control chars\n",escape_all_control_characters ? "requests" : "doesn't request");
 		fprintf(stderr,"receiver %s escaped 8th bit\n"      ,escape_8th_bit                ? "requests" : "doesn't request");
 		fprintf(stderr,"receiver %s use variable headers\n" ,use_variable_headers          ? "can"      : "can't");
+		fprintf(stderr,"receiver buffer size: %" PRIu16 " bytes\n",receiver_buffer_size);
 	}
 
 	/* 
