@@ -58,7 +58,8 @@
  */
 
 #define ZMAXHLEN    0x10		/* maximum header information length */
-#define ZMAXSPLEN	0x400		/* maximum subpacket length */
+#define ZBLOCKLEN   0x400		/* standard maximum subpacket length */
+#define ZMAXSPLEN   0x2000		/* ZedZap maximum subpacket length */
 
 
 #define	ZPAD		0x2a		/* pad character; begins frames */

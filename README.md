@@ -34,6 +34,15 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 Special thanks to Jacques Mattheij, formerly of Mattheij Computer Service,
 and original author of zmtx/zmrx.
 
+## Transfer modes
+
+The default sender uses standard ZMODEM data subpackets of at most 1 KiB.
+`zmtx -4` and `zmtx -8` enable the non-standard 4 KiB and 8 KiB ZedZap
+extensions. The sender starts at 1 KiB and grows toward the selected maximum
+while the transfer remains error-free. Because ZedZap has no wire-level
+negotiation, these options should be used only with compatible receivers.
+`zmrx` accepts all three sizes automatically.
+
 ## Intended audience
 
 the intended audience of this document are programmers looking for

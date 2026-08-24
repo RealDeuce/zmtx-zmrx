@@ -1,10 +1,10 @@
-.TH ZMTX 1 "July 1994"
+.TH ZMTX 1 "August 2026"
 .SH NAME
 zmtx \- transmit file using ZMODEM protocol
 .SH SYNOPSIS
 .B zmtx
 [
-.B \-nopdv
+.B \-48nopdv
 ] [
 .B \-l\fIline\fP
 ]
@@ -18,6 +18,14 @@ reads
 and writes
 .IR stdout.
 .SH OPTIONS
+.TP
+.B \-4
+Use ZedZap data subpackets up to 4 KiB.  The sender starts with a
+standard 1 KiB subpacket and increases the size after clean transfers.
+.TP
+.B \-8
+Use ZedZap data subpackets up to 8 KiB.  This extension is not negotiated;
+use it only with a receiver known to accept ZedZap subpackets.
 .TP
 .B \-l\fIline\fP
 File (typically a tty) to use for the transfer instead
@@ -44,4 +52,3 @@ Debug mode.
 .BR  zmrx(1), sz(1), rz(1)
 .SH AUTHOR
 Jacques Mattheij <jacquesm@hacktic.nl>
-

@@ -48,7 +48,6 @@
 #include "zmdm.h"
 #include "opts.h"
 
-#define MAX_SUBPACKETSIZE 1024
 #define MAX_RETRIES 10
 #define EXIT_TRANSFER_FAILED 4
 
@@ -61,9 +60,10 @@ enum send_result {
 char * line = NULL;												/* device to use for io */
 bool opt_v = false;											/* show progress output */
 bool opt_d = false;											/* show debug output */
-size_t subpacket_size = MAX_SUBPACKETSIZE;						/* data subpacket size. may be modified during a session */
+size_t subpacket_size = ZBLOCKLEN;							/* current data subpacket size */
+size_t max_subpacket_size = ZBLOCKLEN;						/* selected maximum data subpacket size */
 int n_files_remaining;
-uint8_t tx_data_subpacket[1024];
+uint8_t tx_data_subpacket[ZMAXSPLEN];
 
 off_t current_file_size;
 time_t transfer_start;
@@ -79,6 +79,35 @@ parse_zrinit(void)
 	escape_all_control_characters = (rxd_header[ZF0] & ZF0_ESCCTL) != 0;
 	escape_8th_bit = (rxd_header[ZF0] & ZF0_ESC8) != 0;
 	use_variable_headers = (rxd_header[ZF1] & ZF1_CANVHDR) != 0;
+}
+
+static void
+increase_subpacket_size(void)
+
+{
+	if (subpacket_size < max_subpacket_size) {
+		subpacket_size *= 2;
+		if (subpacket_size > max_subpacket_size) {
+			subpacket_size = max_subpacket_size;
+		}
+	}
+}
+
+static void
+reduce_subpacket_size(void)
+
+{
+	if (subpacket_size == max_subpacket_size &&
+	    max_subpacket_size > ZBLOCKLEN) {
+		max_subpacket_size /= 2;
+	}
+	if (subpacket_size > 128) {
+		subpacket_size /= 2;
+	}
+	if (opt_d) {
+		fprintf(stderr,"zmtx: reducing data subpacket size to %zu bytes"
+		    " (maximum %zu)\n",subpacket_size,max_subpacket_size);
+	}
 }
 
 /* 
@@ -202,6 +231,7 @@ send_from(char * name,FILE * fp)
 				}
 			}
 		}
+		increase_subpacket_size();
 	}
 }
 
@@ -441,9 +471,11 @@ send_file(char * name)
 		}
 		if (type == ZRPOS) {
 			pos = zmodem_header_position(rxd_header);
+			reduce_subpacket_size();
 			continue;
 		}
 		if (type == ZNAK || type == TIMEOUT) {
+			reduce_subpacket_size();
 			continue;
 		}
 		if (type != ZACK) {
@@ -504,6 +536,8 @@ usage(void)
 	printf("zmtx %s Copyright (c) 1994 Stephen Hurd\n",VERSION);
 	printf("usage : zmtx options files\n");
 	printf("	-lline      line to use for io\n");
+	printf("	-4          use ZedZap 4 KiB data subpackets\n");
+	printf("	-8          use ZedZap 8 KiB data subpackets\n");
 	printf("	-n    		transfer if source is newer\n");
 	printf("	-o    	    overwrite if exists\n");
 	printf("	-p          protect (don't overwrite if exists)\n");
@@ -530,7 +564,13 @@ main(int argc,char ** argv)
 	argv++;
 	while (--argc > 0 && ((*argv)[0] == '-')) {
 		for (s = argv[0]+1; *s != '\0'; s++) {
-			switch (toupper(*s)) {
+				switch (toupper(*s)) {
+				case '4':
+					max_subpacket_size = 4096;
+					break;
+				case '8':
+					max_subpacket_size = ZMAXSPLEN;
+					break;
 				OPT_BOOL('D',opt_d);
 				OPT_BOOL('V',opt_v);
 

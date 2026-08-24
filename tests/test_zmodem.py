@@ -227,6 +227,76 @@ class ZmodemTests(unittest.TestCase):
             for size in sizes
         ])
 
+    def test_receiver_accepts_zedzap_subpacket(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            process, peer = self.start_receiver(temporary)
+            try:
+                payload = bytes(index & 0xFF for index in range(8192))
+                info = b"zedzap.bin\0" + b"8192 0 0 0 1 0\0"
+                peer.send(hex_header(ZFILE) + data_subpacket(info, ZCRCW))
+                frame_type, position, _ = peer.header()
+                self.assertEqual((frame_type, position), (ZRPOS, 0))
+                peer.send(hex_header(ZDATA) + data_subpacket(payload, ZCRCE))
+                peer.send(hex_header(ZEOF, len(payload)))
+                frame_type, _, _ = peer.header()
+                self.assertEqual(frame_type, ZRINIT)
+                returncode, stderr = finish_receiver(peer, process)
+                self.assertEqual(returncode, 0, stderr.decode(errors="replace"))
+                self.assertEqual((Path(temporary) / "zedzap.bin").read_bytes(), payload)
+            finally:
+                peer.sock.close()
+                if process.poll() is None:
+                    process.kill()
+                    process.wait()
+
+    def test_sender_adapts_toward_zedzap_maximum(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            payload = bytes(index & 0xFF for index in range(20000))
+            source = Path(temporary) / "zedzap.bin"
+            source.write_bytes(payload)
+            local, remote = socket.socketpair()
+            process = subprocess.Popen(
+                [str(ZMTX), "-8", source.name], cwd=temporary,
+                stdin=local, stdout=local, stderr=subprocess.PIPE,
+            )
+            local.close()
+            peer = Peer(remote)
+            try:
+                frame_type, _, _ = peer.header()
+                self.assertEqual(frame_type, ZRQINIT)
+                peer.send(hex_header(ZRINIT, header=bytes((ZRINIT, 0, 0, 0, 3))))
+                frame_type, _, _ = peer.header()
+                self.assertEqual(frame_type, ZFILE)
+                peer.data()
+                peer.send(hex_header(ZRPOS, 0))
+                frame_type, position, _ = peer.header()
+                self.assertEqual((frame_type, position), (ZDATA, 0))
+
+                chunks = []
+                frame_end = ZCRCG
+                while frame_end == ZCRCG:
+                    chunk, frame_end = peer.data()
+                    chunks.append(chunk)
+                self.assertEqual([len(chunk) for chunk in chunks],
+                                 [1024, 2048, 4096, 8192, 4640])
+                self.assertEqual(b"".join(chunks), payload)
+                self.assertEqual(frame_end, ZCRCE)
+
+                frame_type, position, _ = peer.header()
+                self.assertEqual((frame_type, position), (ZEOF, len(payload)))
+                peer.send(hex_header(ZRINIT, header=bytes((ZRINIT, 0, 0, 0, 3))))
+                frame_type, _, _ = peer.header()
+                self.assertEqual(frame_type, ZFIN)
+                peer.send(hex_header(ZFIN))
+                self.assertEqual(bytes(peer.byte() for _ in range(2)), b"OO")
+                stderr = process.communicate(timeout=10)[1]
+                self.assertEqual(process.returncode, 0, stderr.decode(errors="replace"))
+            finally:
+                remote.close()
+                if process.poll() is None:
+                    process.kill()
+                    process.wait()
+
     def test_receiver_acknowledges_committed_position_and_ignores_length_estimate(self):
         with tempfile.TemporaryDirectory() as temporary:
             process, peer = self.start_receiver(temporary)
