@@ -191,8 +191,13 @@ show_progress(char * name,FILE * fp)
 	position = ftello(fp);
 
 	if (current_file_size > 0 && position >= 0) {
-		percentage = (int)(100.0 * (double)position /
-			(double)current_file_size);
+		if (position >= current_file_size) {
+			percentage = 100;
+		}
+		else {
+			percentage = (int)(100.0 * (double)position /
+				(double)current_file_size);
+		}
 	}
 	else {
 		percentage = 100;
@@ -721,7 +726,7 @@ main(int argc,char ** argv)
 	argv++;
 	while (--argc > 0 && ((*argv)[0] == '-')) {
 		for (s = argv[0]+1; *s != '\0'; s++) {
-				switch (toupper(*s)) {
+			switch (toupper((unsigned char)*s)) {
 				case '4':
 					max_subpacket_size = 4096;
 					break;

@@ -96,10 +96,12 @@ show_progress(char * name,FILE * fp)
 	position = ftello(fp);
 
 	if (current_file_size_known && current_file_size > 0 && position >= 0) {
-		percentage = (int)(100.0 * (double)position /
-			(double)current_file_size);
-		if (percentage > 100) {
+		if ((uintmax_t)position >= current_file_size) {
 			percentage = 100;
+		}
+		else {
+			percentage = (int)(100.0 * (double)position /
+				(double)current_file_size);
 		}
 	}
 	else {
@@ -597,7 +599,7 @@ main(int argc,char ** argv)
 	argv++;
 	while (--argc > 0 && ((*argv)[0] == '-')) {
 		for (s = argv[0]+1; *s != '\0'; s++) {
-			switch (toupper(*s)) {
+			switch (toupper((unsigned char)*s)) {
 				OPT_BOOL('D',opt_d);
 				OPT_BOOL('V',opt_v);
 				OPT_BOOL('Q',opt_q);

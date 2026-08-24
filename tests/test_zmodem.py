@@ -652,6 +652,23 @@ class ZmodemTests(unittest.TestCase):
                     process.kill()
                     process.wait()
 
+    def test_receiver_consumes_oversized_crc16_subpacket(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            process, peer = self.start_receiver(temporary)
+            try:
+                info = b"a" * 8193
+                peer.send(hex_header(ZFILE) + data_subpacket(info, ZCRCW))
+                frame_type, position, _ = peer.header()
+                self.assertEqual((frame_type, position), (ZNAK, 0))
+                returncode, stderr = finish_receiver(peer, process)
+                self.assertEqual(returncode, 0,
+                                 stderr.decode(errors="replace"))
+            finally:
+                peer.sock.close()
+                if process.poll() is None:
+                    process.kill()
+                    process.wait()
+
     def test_receiver_skips_a_pathname_that_does_not_fit(self):
         with tempfile.TemporaryDirectory() as temporary:
             process, peer = self.start_receiver(temporary)
@@ -662,6 +679,29 @@ class ZmodemTests(unittest.TestCase):
                 self.assertEqual((frame_type, position), (ZSKIP, 0))
                 returncode, stderr = finish_receiver(peer, process)
                 self.assertEqual(returncode, 0, stderr.decode(errors="replace"))
+            finally:
+                peer.sock.close()
+                if process.poll() is None:
+                    process.kill()
+                    process.wait()
+
+    def test_receiver_accepts_maximum_length_pathname(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            process, peer = self.start_receiver(temporary)
+            try:
+                name = "n" * 127
+                info = name.encode("ascii") + b"\0" + b"0 0 0 0 1 0\0"
+                peer.send(hex_header(ZFILE) + data_subpacket(info, ZCRCW))
+                frame_type, position, _ = peer.header()
+                self.assertEqual((frame_type, position), (ZRPOS, 0))
+                peer.send(hex_header(ZDATA) + data_subpacket(b"", ZCRCE))
+                peer.send(hex_header(ZEOF))
+                frame_type, _, _ = peer.header()
+                self.assertEqual(frame_type, ZRINIT)
+                returncode, stderr = finish_receiver(peer, process)
+                self.assertEqual(returncode, 0,
+                                 stderr.decode(errors="replace"))
+                self.assertEqual((Path(temporary) / name).read_bytes(), b"")
             finally:
                 peer.sock.close()
                 if process.poll() is None:
