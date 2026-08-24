@@ -38,6 +38,7 @@
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <inttypes.h>
+#include <signal.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
@@ -48,6 +49,14 @@
 #include "opts.h"
 
 #define MAX_SUBPACKETSIZE 1024
+#define MAX_RETRIES 10
+#define EXIT_TRANSFER_FAILED 4
+
+enum send_result {
+	SEND_FAILED = -1,
+	SEND_SKIPPED = 0,
+	SEND_SUCCEEDED = 1
+};
 
 char * line = NULL;												/* device to use for io */
 bool opt_v = false;											/* show progress output */
@@ -58,6 +67,19 @@ uint8_t tx_data_subpacket[1024];
 
 off_t current_file_size;
 time_t transfer_start;
+
+static void
+parse_zrinit(void)
+
+{
+	can_full_duplex = (rxd_header[ZF0] & ZF0_CANFDX) != 0;
+	can_overlap_io = (rxd_header[ZF0] & ZF0_CANOVIO) != 0;
+	can_break = (rxd_header[ZF0] & ZF0_CANBRK) != 0;
+	can_fcs_32 = (rxd_header[ZF0] & ZF0_CANFC32) != 0;
+	escape_all_control_characters = (rxd_header[ZF0] & ZF0_ESCCTL) != 0;
+	escape_8th_bit = (rxd_header[ZF0] & ZF0_ESC8) != 0;
+	use_variable_headers = (rxd_header[ZF1] & ZF1_CANVHDR) != 0;
+}
 
 /* 
  * show the progress of the transfer like this:
@@ -107,7 +129,6 @@ send_from(char * name,FILE * fp)
 
 {
 	size_t n;
-	int type = ZCRCG;
 	off_t position;
 	uint8_t zdata_frame[] = { ZDATA, 0, 0, 0, 0 };
 
@@ -121,12 +142,16 @@ send_from(char * name,FILE * fp)
 	}
 	zmodem_set_header_position(zdata_frame,(uint32_t)position);
 
-	tx_header(zdata_frame);
+	if (tx_header(zdata_frame) != 0) {
+		return ZFERR;
+	}
 	/*
 	 * send the data in the file
 	 */
 
-	while (!feof(fp)) {
+	for (;;) {
+		uint8_t frame_end;
+
 		if (opt_v) {
 			show_progress(name,fp);
 		}
@@ -134,39 +159,31 @@ send_from(char * name,FILE * fp)
 		/*
 		 * read a block from the file
 		 */
+		position = ftello(fp);
+		if (position < 0 || (uintmax_t)position > UINT32_MAX) {
+			(void)tx_pos_header(ZFERR,UINT32_C(0));
+			return ZFERR;
+		}
 		n = fread(tx_data_subpacket,1,subpacket_size,fp);
-
-		if (n == 0) {
-			/*
-			 * nothing to send ?
-			 */
-			break;
+		if (ferror(fp)) {
+			(void)tx_pos_header(ZFERR,(uint32_t)position);
+			return ZFERR;
 		}
-
-		/*
-		 * at end of file wait for an ACK
-		 */
-		if (ftello(fp) == current_file_size) {
-			type = ZCRCW;
+		if (n > UINT32_MAX || (uintmax_t)position > UINT32_MAX - (uint32_t)n) {
+			(void)tx_pos_header(ZFERR,(uint32_t)position);
+			return ZFERR;
 		}
-
-		tx_data((uint8_t)type,tx_data_subpacket,n);
-
-		if (type == ZCRCW) {
-			int type;
-			do {
-				type = rx_header(10000);
-				if (type == ZNAK || type == ZRPOS) {
-					return type;
-				}
-			} while (type != ZACK);
-
-			if (ftello(fp) == current_file_size) {
-				if (opt_d) {
-					fprintf(stderr,"end of file\n");
-				}
-				return ZACK;
+		position += (off_t)n;
+		frame_end = n < subpacket_size ? ZCRCE : ZCRCG;
+		if (tx_data(frame_end,tx_data_subpacket,n) != 0) {
+			return ZFERR;
+		}
+		if (frame_end == ZCRCE) {
+			current_file_size = position;
+			if (opt_d) {
+				fprintf(stderr,"end of file\n");
 			}
+			return ZACK;
 		}
 
 		/* 
@@ -178,21 +195,14 @@ send_from(char * name,FILE * fp)
 			int type;
 			int c;
 			c = rx_raw(1000);
-			if (c == ZPAD) {
+			if ((c & 0x7f) == ZPAD) {
 				type = rx_header(1000);
-				if (type != TIMEOUT && type != ACK) {
+				if (type != TIMEOUT && type != ZACK) {
 					return type;
 				}
 			}
 		}
 	}
-
-	/*
-	 * end of file reached.
-	 * should receive something... so fake ZACK
-	 */
-
-	return ZACK;
 }
 
 /*
@@ -200,20 +210,37 @@ send_from(char * name,FILE * fp)
  * (using ZABORT frame)
  */
 
-bool
+static bool
+seek_sender(FILE * fp,uint32_t position)
+
+{
+	off_t offset = (off_t)position;
+	struct stat s;
+
+	if (offset < 0 || (uintmax_t)offset != position ||
+	    fstat(fileno(fp),&s) != 0 || s.st_size < 0 ||
+	    (uintmax_t)position > (uintmax_t)s.st_size) {
+		return false;
+	}
+	return fseeko(fp,offset,SEEK_SET) == 0;
+}
+
+enum send_result
 send_file(char * name)
 
 {
+	unsigned attempts;
 	uint32_t pos;
 	uint32_t size;
-	off_t seek_pos;
 	struct stat s;
 	FILE * fp;
 	uintmax_t wire_mdate;
 	char * p;
+	size_t remaining;
 	uint8_t zfile_frame[] = { ZFILE, 0, 0, 0, 0 };
 	uint8_t zeof_frame[] = { ZEOF, 0, 0, 0, 0 };
 	int type;
+	int written;
 	char * n;
 
 	if (opt_v) {
@@ -230,7 +257,7 @@ send_file(char * name)
 		if (opt_v) {
 			fprintf(stderr,"zmtx: can't open file %s\n",name);
 		}
-		return false;
+		return SEND_FAILED;
 	}
 
 	if (fstat(fileno(fp),&s) != 0) {
@@ -238,14 +265,14 @@ send_file(char * name)
 			fprintf(stderr,"zmtx: can't stat file %s\n",name);
 		}
 		fclose(fp);
-		return false;
+		return SEND_FAILED;
 	}
 	if (s.st_size < 0 || (uintmax_t)s.st_size > UINT32_MAX) {
 		if (opt_v) {
 			fprintf(stderr,"zmtx: file is too large for ZMODEM: %s\n",name);
 		}
 		fclose(fp);
-		return false;
+		return SEND_FAILED;
 	}
 	size = (uint32_t)s.st_size;
 	current_file_size = s.st_size;
@@ -328,74 +355,52 @@ send_file(char * name)
 		n++;
 	}
 
-	strcpy(p,n);
+	if (strlen(n) >= sizeof(tx_data_subpacket)) {
+		fclose(fp);
+		return SEND_FAILED;
+	}
+	memcpy(p,n,strlen(n) + 1);
+	p += strlen(n) + 1;
+	remaining = sizeof(tx_data_subpacket) - (size_t)(p - (char *)tx_data_subpacket);
+	written = snprintf(p,remaining,"%" PRIu32 " %" PRIoMAX " 0 0 %d 0",
+		size,wire_mdate,n_files_remaining);
+	if (written < 0 || (size_t)written >= remaining) {
+		fclose(fp);
+		return SEND_FAILED;
+	}
+	p += (size_t)written + 1;
 
-	p += strlen(p) + 1;
+	type = TIMEOUT;
+	for (attempts=0;attempts<MAX_RETRIES;attempts++) {
+		bool stale_zrinit = false;
 
-	/*
-	 * next the file size
-	 */
-
-	sprintf(p,"%" PRIu32 " ",size);
-
-	p += strlen(p);
-
-	/*
- 	 * modification date
-	 */
-
-	sprintf(p,"%" PRIoMAX " ",wire_mdate);
-
-	p += strlen(p);
-
-	/*
-	 * file mode
-	 */
-
-	sprintf(p,"0 ");
-
-	p += strlen(p);
-
-	/*
-	 * serial number (??)
-	 */
-
-	sprintf(p,"0 ");
-
-	p += strlen(p);
-
-	/*
-	 * number of files remaining
-	 */
-
-	sprintf(p,"%d ",n_files_remaining);
-
-	p += strlen(p);
-
-	/*
-	 * file type
-	 */
-
-	sprintf(p,"0");
-
-	p += strlen(p) + 1;
-
-	do {
 		/*
 	 	 * send the header and the data
 	 	 */
 
-		tx_header(zfile_frame);
-		tx_data(ZCRCW,tx_data_subpacket,
-			(size_t)(p - (char *)tx_data_subpacket));
+		if (tx_header(zfile_frame) != 0 ||
+		    tx_data(ZCRCW,tx_data_subpacket,
+		    (size_t)(p - (char *)tx_data_subpacket)) != 0) {
+			fclose(fp);
+			return SEND_FAILED;
+		}
 	
 		/*
 		 * wait for anything but an ZACK packet
 		 */
 
-		do {
+		for (;;) {
 			type = rx_header(10000);
-		} while (type == ZACK);
+			if (type == ZACK) {
+				continue;
+			}
+			if (type == ZRINIT && !stale_zrinit) {
+				parse_zrinit();
+				stale_zrinit = true;
+				continue;
+			}
+			break;
+		}
 
 		if (opt_d) {
 			fprintf(stderr,"type : %d\n",type);
@@ -406,68 +411,83 @@ send_file(char * name)
 			if (opt_v) {
 				fprintf(stderr,"zmtx: skipped file \"%s\"                       \n",name);
 			}
-			return false;
+			return SEND_SKIPPED;
 		}
-
-	} while (type != ZRPOS);
+		if (type == ZRPOS) {
+			break;
+		}
+	}
+	if (type != ZRPOS) {
+		fclose(fp);
+		return SEND_FAILED;
+	}
 
 	transfer_start = time(NULL);
+	pos = zmodem_header_position(rxd_header);
 
-	do {
-		/*
-		 * fetch pos from the ZRPOS header
-		 */
+	for (attempts=0;attempts<MAX_RETRIES;attempts++) {
+		unsigned finish_attempts;
+		bool resume = false;
 
+		if (!seek_sender(fp,pos)) {
+			(void)tx_pos_header(ZFERR,pos);
+			fclose(fp);
+			return SEND_FAILED;
+		}
+		type = send_from(n,fp);
+		if (type == ZSKIP) {
+			fclose(fp);
+			return SEND_SKIPPED;
+		}
 		if (type == ZRPOS) {
 			pos = zmodem_header_position(rxd_header);
+			continue;
 		}
-
-		/*
- 		 * seek to the right place in the file
-		 */
-		seek_pos = (off_t)pos;
-		if (seek_pos < 0 || (uintmax_t)seek_pos != pos ||
-		    fseeko(fp,seek_pos,SEEK_SET) != 0) {
+		if (type == ZNAK || type == TIMEOUT) {
+			continue;
+		}
+		if (type != ZACK) {
 			fclose(fp);
-			return true;
+			return SEND_FAILED;
 		}
 
-		/*
-		 * and start sending
-		 */
-
-		type = send_from(n,fp);
-
-		if (type == ZFERR || type == ZABORT) {
- 			fclose(fp);
-			return true;
+			zmodem_set_header_position(zeof_frame,(uint32_t)current_file_size);
+		for (finish_attempts=0;finish_attempts<MAX_RETRIES;finish_attempts++) {
+			if (tx_hex_header(zeof_frame) != 0) {
+				fclose(fp);
+				return SEND_FAILED;
+			}
+			type = rx_header(10000);
+			if (type == ZRINIT) {
+				parse_zrinit();
+				fclose(fp);
+				if (opt_v) {
+					fprintf(stderr,"zmtx: sent file \"%s\"                                    \n",name);
+				}
+				return SEND_SUCCEEDED;
+			}
+			if (type == ZRPOS) {
+				pos = zmodem_header_position(rxd_header);
+				resume = true;
+				break;
+			}
+			if (type == ZSKIP) {
+				fclose(fp);
+				return SEND_SKIPPED;
+			}
+			if (type != ZACK && type != TIMEOUT) {
+				fclose(fp);
+				return SEND_FAILED;
+			}
 		}
-
-	} while (type == ZRPOS || type == ZNAK);
-
-	/*
-	 * file sent. send end of file frame
-	 * and wait for zrinit. if it doesnt come then try again
-	 */
-
-	zmodem_set_header_position(zeof_frame,size);
-
-	do {
-		tx_hex_header(zeof_frame);
-		type = rx_header(10000);
-	} while (type != ZRINIT);
-
-	/*
-	 * and close the input file
-	 */
-
-	if (opt_v) {
-		fprintf(stderr,"zmtx: sent file \"%s\"                                    \n",name);
+		if (!resume) {
+			fclose(fp);
+			return SEND_FAILED;
+		}
 	}
 
 	fclose(fp);
-
-	return false;
+	return SEND_FAILED;
 }
 
 void
@@ -501,8 +521,11 @@ int
 main(int argc,char ** argv)
 
 {
+	bool transfer_failed = false;
 	int i;
 	char * s;
+
+	(void)signal(SIGPIPE,SIG_IGN);
 
 	argv++;
 	while (--argc > 0 && ((*argv)[0] == '-')) {
@@ -576,10 +599,12 @@ main(int argc,char ** argv)
 			exit(3);
 		}
 
-		tx_raw('z');
-		tx_raw('m');
-		tx_raw(13);
-		tx_hex_header(zrqinit_header);
+		if (tx_raw('z') != 0 || tx_raw('m') != 0 || tx_raw(CR) != 0 ||
+		    tx_hex_header(zrqinit_header) != 0) {
+			fprintf(stderr,"zmtx: output error establishing contact\n");
+			cleanup();
+			exit(3);
+		}
 	} while (rx_header(7000) != ZRINIT);
 
 	if (opt_v) {
@@ -592,14 +617,7 @@ main(int argc,char ** argv)
 	 * forget about encryption and compression.
 	 */
 
-	can_full_duplex					= (rxd_header[ZF0] & ZF0_CANFDX)  != 0;
-	can_overlap_io					= (rxd_header[ZF0] & ZF0_CANOVIO) != 0;
-	can_break						= (rxd_header[ZF0] & ZF0_CANBRK)  != 0;
-	can_fcs_32						= (rxd_header[ZF0] & ZF0_CANFC32) != 0;
-	escape_all_control_characters	= (rxd_header[ZF0] & ZF0_ESCCTL)  != 0;
-	escape_8th_bit					= (rxd_header[ZF0] & ZF0_ESC8)    != 0;
-
-	use_variable_headers			= (rxd_header[ZF1] & ZF1_CANVHDR) != 0;
+	parse_zrinit();
 
 	if (opt_d) {
 		fprintf(stderr,"receiver %s full duplex\n"          ,can_full_duplex               ? "can"      : "can't");
@@ -618,10 +636,13 @@ main(int argc,char ** argv)
 	n_files_remaining = argc;
 
 	while (argc) {
-		if (send_file(*argv)) {
+		enum send_result result = send_file(*argv);
+
+		if (result == SEND_FAILED) {
 			if (opt_v) {
-				fprintf(stderr,"zmtx: remote aborted.\n");
+				fprintf(stderr,"zmtx: transfer failed.\n");
 			}
+			transfer_failed = true;
 			break;
 		}
 
@@ -639,13 +660,21 @@ main(int argc,char ** argv)
 	}
 
 	{
+		unsigned attempts;
 		int type;
 		uint8_t zfin_header[] = { ZFIN, 0, 0, 0, 0 };
 
-		tx_hex_header(zfin_header);
-		do {
+		type = TIMEOUT;
+		for (attempts=0;attempts<MAX_RETRIES;attempts++) {
+			if (tx_hex_header(zfin_header) != 0) {
+				transfer_failed = true;
+				break;
+			}
 			type = rx_header(10000);
-		} while (type != ZFIN && type != TIMEOUT);
+			if (type == ZFIN) {
+				break;
+			}
+		}
 		
 		/*
 		 * these Os are formally required; but they don't do a thing
@@ -653,9 +682,13 @@ main(int argc,char ** argv)
 		 * (both programs already sent a ZFIN so why bother ?)
 		 */
 
-		if (type != TIMEOUT) {
-			tx_raw('O');
-			tx_raw('O');
+		if (type == ZFIN) {
+			if (tx_raw('O') != 0 || tx_raw('O') != 0 || tx_flush() != 0) {
+				transfer_failed = true;
+			}
+		}
+		else {
+			transfer_failed = true;
 		}
 	}
 
@@ -669,7 +702,7 @@ main(int argc,char ** argv)
 
 	cleanup();
 
-	exit(0);
+	exit(transfer_failed ? EXIT_TRANSFER_FAILED : 0);
 
 	return 0;
 }

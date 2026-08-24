@@ -38,7 +38,7 @@ jobs:
         env:
           CC: ${{ matrix.compiler }}
           CFLAGS: -O2 -Wall -Wextra -Werror -pedantic-errors
-        run: make
+        run: make check
 
   release:
     name: Package source release

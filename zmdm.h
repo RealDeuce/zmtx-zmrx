@@ -95,7 +95,7 @@ fd_exit(void);													/* reset io channel to state before zmtx was called *
 int rx_poll(void);
 void rx_purge(void);
 int rx_raw(int);
-int rx_data(uint8_t *, size_t *);
+int rx_data(uint8_t *, size_t, size_t *, uint8_t *);
 int rx_header_and_check(int);
 
 uint32_t zmodem_header_position(const uint8_t *);
@@ -103,12 +103,13 @@ void zmodem_set_header_position(uint8_t *, uint32_t);
 
 void cleanup(void);
 
-void tx_data(uint8_t, const uint8_t *, size_t);
-void tx_header(const uint8_t *);
-void tx_hex_header(const uint8_t *);
-void tx_pos_header(uint8_t, uint32_t);
-void tx_raw(int);
-void tx_znak(void);
+int tx_data(uint8_t, const uint8_t *, size_t);
+int tx_flush(void);
+int tx_header(const uint8_t *);
+int tx_hex_header(const uint8_t *);
+int tx_pos_header(uint8_t, uint32_t);
+int tx_raw(int);
+int tx_znak(void);
 
 int
 rx_header(int to);												/* receive any header with timeout in milliseconds */
