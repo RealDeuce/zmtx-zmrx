@@ -15,8 +15,8 @@ zmtx:	zmtx.o zmdm.o crctab.o
 zmrx:	zmrx.o zmdm.o crctab.o
 	$(CC) $(CFLAGS) $(OFLAG) zmrx.o zmdm.o crctab.o -o zmrx
 
-zmtx.o:		zmtx.c version.h zmodem.h zmdm.h opts.h
-zmrx.o:		zmrx.c version.h zmodem.h zmdm.h opts.h
+zmtx.o:	zmtx.c version.h zmodem.h zmdm.h opts.h
+zmrx.o:	zmrx.c version.h zmodem.h zmdm.h opts.h
 
 zmdm.o:		zmdm.c zmodem.h zmdm.h crctab.h
 crctab.o:	crctab.c crctab.h

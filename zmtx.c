@@ -15,15 +15,15 @@
 /*    documentation and/or other materials provided with the distribution.    */
 /*                                                                            */
 /* THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"*/
-/* AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE   */
+/* AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE  */
 /* IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE */
 /* ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE  */
-/* LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR         */
+/* LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR        */
 /* CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF       */
 /* SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS   */
-/* INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN     */
-/* CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)     */
-/* ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE  */
+/* INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN    */
+/* CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)    */
+/* ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE */
 /* POSSIBILITY OF SUCH DAMAGE.                                                */
 /******************************************************************************/
 
@@ -695,8 +695,8 @@ usage(void)
 	printf("	-8          use ZedZap 8 KiB data subpackets\n");
 	printf("	-s          wait for an acknowledgement after each block\n");
 	printf("	-wbytes     limit unacknowledged data (K and M suffixes allowed)\n");
-	printf("	-n    		transfer if source is newer\n");
-	printf("	-o    	    overwrite if exists\n");
+	printf("	-n          transfer if source is newer\n");
+	printf("	-o          overwrite if exists\n");
 	printf("	-p          protect (don't overwrite if exists)\n");
 	printf("\n");
 	printf("	-d          debug output\n");
