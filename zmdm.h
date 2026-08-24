@@ -1,6 +1,6 @@
 /*
  * zmdm.h
- * zmodem primitives prototypes and global data
+ * zmodem primitives prototypes and state
  *
  * Copyright (c) 1994 Stephen Hurd
  * All rights reserved.
@@ -33,85 +33,99 @@
  * and original author of zmtx/zmrx.
  */
 
-#ifndef _ZMDM_H
+#ifndef ZMDM_H_INCLUDED
+#define ZMDM_H_INCLUDED
 
-#define _ZMDM_H
-
-#ifdef ZMDM
-#define EXTERN
-#else
-#define EXTERN extern
-#endif
-
-
-#include <errno.h>
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 
-#define ENDOFFRAME 2
-#define FRAMEOK    1
-#define TIMEOUT   -1											/* rx routine did not receive a character within timeout */
-#define INVHDR    -2											/* invalid header received; but within timeout */
-#define INVDATA   -3											/* invalid data subpacket received */
-#define ZDLEESC 0x8000											/* one of ZCRCE; ZCRCG; ZCRCQ or ZCRCW was received; ZDLE escaped */
+#include "zmodem.h"
 
-#define HDRLEN     5											/* size of a zmodme header */
+enum zmodem_result {
+	ZMODEM_INVALID_ARGUMENT = -6,
+	ZMODEM_IO_ERROR = -5,
+	ZMODEM_CANCELLED = -4,
+	ZMODEM_INVALID_DATA = -3,
+	ZMODEM_INVALID_HEADER = -2,
+	ZMODEM_TIMEOUT = -1,
+	ZMODEM_OK = 0,
+	ZMODEM_FRAME_OK = 1,
+	ZMODEM_END_OF_FRAME = 2
+};
 
-EXTERN int in_fp;												/* input file descriptor */
-EXTERN int out_fp;												/* output file descriptor */
-EXTERN uint8_t rxd_header[ZMAXHLEN];							/* last received header */
-EXTERN size_t rxd_header_len;									/* last received header size */
+#define ENDOFFRAME ZMODEM_END_OF_FRAME
+#define FRAMEOK ZMODEM_FRAME_OK
+#define TIMEOUT ZMODEM_TIMEOUT
+#define INVHDR ZMODEM_INVALID_HEADER
+#define INVDATA ZMODEM_INVALID_DATA
+#define ZDLEESC UINT16_C(0x8000)
+
+#define HDRLEN UINT8_C(5)
+#define ZMODEM_INPUT_CAPACITY (2U * ZMAXSPLEN)
+#define ZMODEM_TX_DATA_WIRE_CAPACITY (2U * ZMAXSPLEN + 11U)
+#define ZMODEM_TX_BINARY_HEADER_WIRE_CAPACITY 24U
+#define ZMODEM_TX_BURST_CAPACITY \
+	(ZMODEM_TX_BINARY_HEADER_WIRE_CAPACITY + ZMODEM_TX_DATA_WIRE_CAPACITY)
+
+struct zmodem_io {
+	void * context;
+	int (*read)(void *,uint8_t *,size_t,size_t *,int);
+	int (*write)(void *,const uint8_t *,size_t);
+	int (*flush)(void *);
+	int (*poll)(void *);
+	int (*purge)(void *);
+};
+
+struct zmodem {
+	struct zmodem_io io;
+	uint8_t rxd_header[ZMAXHLEN];
+	size_t rxd_header_len;
+	bool can_full_duplex;
+	bool can_overlap_io;
+	bool can_break;
+	bool can_fcs_32;
+	bool escape_all_control_characters;
+	bool escape_8th_bit;
+	bool use_variable_headers;
+	bool management_newer;
+	bool management_clobber;
+	bool management_protect;
+	bool receive_32_bit_data;
+	bool want_fcs_32;
+	uint8_t input_buffer[ZMODEM_INPUT_CAPACITY];
+	size_t input_count;
+	size_t input_index;
+	unsigned cancel_count;
+	int last_sent;
+	uint8_t tx_classes[256];
+	bool tx_classes_initialized;
+	uint8_t tx_data_wire[ZMODEM_TX_DATA_WIRE_CAPACITY];
+};
 
 /*
- * receiver capability flags
- * extracted from the ZRINIT frame as received
+ * Pointer arguments qualified with restrict designate independent storage for
+ * the duration of the call.  In particular, receive destinations and result
+ * objects must not overlap one another or protocol state modified by rx_data.
+ * Transmit sources must not overlap protocol storage modified while encoding.
  */
-
-EXTERN bool can_full_duplex;
-EXTERN bool can_overlap_io;
-EXTERN bool can_break;
-EXTERN bool can_fcs_32;
-EXTERN bool escape_all_control_characters;					/* guess */
-EXTERN bool escape_8th_bit;
-
-EXTERN bool use_variable_headers;							/* use variable length headers */
-
-/*
- * file management options.
- * only one should be on
- */
-
-EXTERN bool management_newer;
-EXTERN bool management_clobber;
-EXTERN bool management_protect;
-
-void
-fd_init(void);													/* make the io channel raw */
-
-void
-fd_exit(void);													/* reset io channel to state before zmtx was called */
-
-int rx_poll(void);
-void rx_purge(void);
-int rx_raw(int);
-int rx_data(uint8_t *, size_t, size_t *, uint8_t *);
-int rx_header_and_check(int);
-
+int zmodem_init(struct zmodem * restrict,const struct zmodem_io * restrict);
+int rx_poll(struct zmodem *);
+int rx_purge(struct zmodem *);
+int rx_raw(struct zmodem *,int);
+int rx_data(struct zmodem * restrict,uint8_t * restrict,size_t,
+    size_t * restrict,uint8_t * restrict);
+int rx_header_and_check(struct zmodem *,int);
 uint32_t zmodem_header_position(const uint8_t *);
-void zmodem_set_header_position(uint8_t *, uint32_t);
-
-void cleanup(void);
-
-int tx_data(uint8_t, const uint8_t *, size_t);
-int tx_flush(void);
-int tx_header(const uint8_t *);
-int tx_hex_header(const uint8_t *);
-int tx_pos_header(uint8_t, uint32_t);
-int tx_raw(int);
-int tx_znak(void);
-
-int
-rx_header(int to);												/* receive any header with timeout in milliseconds */
+void zmodem_set_header_position(uint8_t *,uint32_t);
+int tx_data(struct zmodem * restrict,uint8_t,
+    const uint8_t * restrict,size_t);
+int tx_flush(struct zmodem *);
+int tx_header(struct zmodem * restrict,const uint8_t * restrict);
+int tx_hex_header(struct zmodem * restrict,const uint8_t * restrict);
+int tx_pos_header(struct zmodem *,uint8_t,uint32_t);
+int tx_raw(struct zmodem *,int);
+int tx_znak(struct zmodem *);
+int rx_header(struct zmodem *,int);
 
 #endif

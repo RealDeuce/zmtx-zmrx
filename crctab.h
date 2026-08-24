@@ -11,6 +11,9 @@
  * wow ! a whole macro ! lets copyright it.....
  */
 
+#ifndef CRCTAB_H_INCLUDED
+#define CRCTAB_H_INCLUDED
+
 #include <stddef.h>
 #include <stdint.h>
 
@@ -18,11 +21,7 @@ extern const uint16_t crc16tab[0x100];
 extern const uint32_t crc32tab[0x100];
 
 uint32_t crc32_update(uint32_t, const uint8_t *, size_t);
+uint16_t crc16_update(uint16_t, uint8_t);
+uint32_t crc32_byte_update(uint32_t, uint8_t);
 
-#define UPDCRC16(cp, crc) \
-	((uint16_t)(crc16tab[((uint16_t)(crc) >> 8) & UINT16_C(0xff)] ^ \
-	((uint32_t)(uint16_t)(crc) << 8) ^ (uint8_t)(cp)))
-
-#define UPDCRC32(b, c) \
-	(crc32tab[((uint32_t)(c) ^ (uint8_t)(b)) & UINT32_C(0xff)] ^ \
-	((uint32_t)(c) >> 8))
+#endif

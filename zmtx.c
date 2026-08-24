@@ -39,15 +39,15 @@
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <inttypes.h>
-#include <signal.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <unistd.h>
 #include "version.h"
 
 #include "zmodem.h"
 #include "zmdm.h"
-#include "opts.h"
+#include "zmdm_posix.h"
 
 #define MAX_RETRIES 10
 #define EXIT_TRANSFER_FAILED 4
@@ -58,34 +58,111 @@ enum send_result {
 	SEND_SUCCEEDED = 1
 };
 
-char * line = NULL;												/* device to use for io */
-bool opt_v = false;											/* show progress output */
-bool opt_d = false;											/* show debug output */
-bool opt_s = false;											/* disable streaming */
-char * window_argument;
-size_t subpacket_size = ZBLOCKLEN;							/* current data subpacket size */
-size_t max_subpacket_size = ZBLOCKLEN;						/* selected maximum data subpacket size */
-uint16_t receiver_buffer_size;
-uint32_t window_size;
-int n_files_remaining;
-uint8_t tx_data_subpacket[ZMAXSPLEN];
+static struct zmodem protocol;
+static struct zmodem_posix_io posix_io;
 
-off_t current_file_size;
-time_t transfer_start;
+static char * line = NULL;				/* device to use for io */
+static bool opt_v = false;				/* show progress output */
+static bool opt_d = false;				/* show debug output */
+static bool opt_s = false;				/* disable streaming */
+static char * window_argument;
+static size_t subpacket_size = ZBLOCKLEN;		/* current data subpacket size */
+static size_t max_subpacket_size = ZBLOCKLEN;		/* selected maximum data subpacket size */
+static uint16_t receiver_buffer_size;
+static uint32_t window_size;
+static int n_files_remaining;
+static uint8_t tx_data_subpacket[ZMAXSPLEN];
+
+static off_t current_file_size;
+static struct timespec transfer_start;
+static bool transfer_clock_started;
+
+static uintmax_t
+elapsed_seconds(void)
+{
+	struct timespec now;
+	time_t seconds;
+
+	if (!transfer_clock_started) {
+		return UINTMAX_C(1);
+	}
+	if (clock_gettime(CLOCK_MONOTONIC,&now) != 0) {
+		return UINTMAX_C(1);
+	}
+	seconds = now.tv_sec - transfer_start.tv_sec;
+	if (now.tv_nsec < transfer_start.tv_nsec) {
+		if (seconds > 0) {
+			seconds -= 1;
+		}
+	}
+	if (seconds <= 0) {
+		return UINTMAX_C(1);
+	}
+	return (uintmax_t)seconds;
+}
+
+static bool
+file_position(int file_fd,off_t * position)
+{
+	off_t result = lseek(file_fd,(off_t)0,SEEK_CUR);
+
+	if (result < 0) {
+		return false;
+	}
+	*position = result;
+	return true;
+}
+
+static bool
+read_file_block(int file_fd,uint8_t * restrict buffer,size_t capacity,
+    size_t * restrict count,bool * restrict end_of_file)
+{
+	size_t used = 0U;
+
+	*end_of_file = false;
+	while (used < capacity) {
+		ssize_t result;
+
+		for (;;) {
+			result = read(file_fd,&buffer[used],capacity - used);
+			if (result >= 0) {
+				break;
+			}
+			if (errno != EINTR) {
+				break;
+			}
+		}
+		if (result < 0) {
+			return false;
+		}
+		if (result == 0) {
+			*end_of_file = true;
+			break;
+		}
+		used += (size_t)result;
+	}
+	*count = used;
+	return true;
+}
 
 static void
 parse_zrinit(void)
 
 {
-	can_full_duplex = (rxd_header[ZF0] & ZF0_CANFDX) != 0;
-	can_overlap_io = (rxd_header[ZF0] & ZF0_CANOVIO) != 0;
-	can_break = (rxd_header[ZF0] & ZF0_CANBRK) != 0;
-	can_fcs_32 = (rxd_header[ZF0] & ZF0_CANFC32) != 0;
-	escape_all_control_characters = (rxd_header[ZF0] & ZF0_ESCCTL) != 0;
-	escape_8th_bit = (rxd_header[ZF0] & ZF0_ESC8) != 0;
-	use_variable_headers = (rxd_header[ZF1] & ZF1_CANVHDR) != 0;
-	receiver_buffer_size = (uint16_t)rxd_header[ZP0] |
-	    (uint16_t)((uint16_t)rxd_header[ZP1] << 8);
+	protocol.can_full_duplex =
+	    (protocol.rxd_header[ZF0] & ZF0_CANFDX) != 0;
+	protocol.can_overlap_io =
+	    (protocol.rxd_header[ZF0] & ZF0_CANOVIO) != 0;
+	protocol.can_break = (protocol.rxd_header[ZF0] & ZF0_CANBRK) != 0;
+	protocol.can_fcs_32 = (protocol.rxd_header[ZF0] & ZF0_CANFC32) != 0;
+	protocol.escape_all_control_characters =
+	    (protocol.rxd_header[ZF0] & ZF0_ESCCTL) != 0;
+	protocol.escape_8th_bit =
+	    (protocol.rxd_header[ZF0] & ZF0_ESC8) != 0;
+	protocol.use_variable_headers =
+	    (protocol.rxd_header[ZF1] & ZF1_CANVHDR) != 0;
+	receiver_buffer_size = (uint16_t)protocol.rxd_header[ZP0] |
+	    (uint16_t)((uint16_t)protocol.rxd_header[ZP1] << 8);
 }
 
 static void
@@ -104,33 +181,43 @@ static void
 reduce_subpacket_size(void)
 
 {
-	if (subpacket_size == max_subpacket_size &&
-	    max_subpacket_size > ZBLOCKLEN) {
-		max_subpacket_size /= 2;
+	if (subpacket_size == max_subpacket_size) {
+		if (max_subpacket_size > ZBLOCKLEN) {
+			max_subpacket_size /= 2;
+		}
 	}
 	if (subpacket_size > 128) {
 		subpacket_size /= 2;
 	}
 	if (opt_d) {
-		fprintf(stderr,"zmtx: reducing data subpacket size to %zu bytes"
+		(void)fprintf(stderr,"zmtx: reducing data subpacket size to %zu bytes"
 		    " (maximum %zu)\n",subpacket_size,max_subpacket_size);
 	}
 }
 
 static bool
-parse_window_size(const char * text,uint32_t * value)
+parse_window_size(const char * restrict text,uint32_t * restrict value)
 
 {
 	char * end;
 	uintmax_t multiplier = 1;
 	uintmax_t parsed;
 
-	if (text == NULL || *text == '\0' || *text == '-') {
+	if (text == NULL) {
+		return false;
+	}
+	if (*text == '\0') {
+		return false;
+	}
+	if (*text == '-') {
 		return false;
 	}
 	errno = 0;
 	parsed = strtoumax(text,&end,10);
-	if (text == end || errno == ERANGE) {
+	if (text == end) {
+		return false;
+	}
+	if (errno == ERANGE) {
 		return false;
 	}
 	if (*end != '\0') {
@@ -148,7 +235,10 @@ parse_window_size(const char * text,uint32_t * value)
 				return false;
 		}
 	}
-	if (parsed == 0 || parsed > UINT32_MAX / multiplier) {
+	if (parsed == 0) {
+		return false;
+	}
+	if (parsed > UINT32_MAX / multiplier) {
 		return false;
 	}
 	*value = (uint32_t)(parsed * multiplier);
@@ -159,11 +249,11 @@ static bool
 accept_acknowledgement(uint32_t sent_position,uint32_t * acknowledged)
 
 {
-	uint32_t position = zmodem_header_position(rxd_header);
+	uint32_t position = zmodem_header_position(protocol.rxd_header);
 
 	if (position > sent_position) {
 		if (opt_d) {
-			fprintf(stderr,"zmtx: invalid acknowledgement position %" PRIu32
+			(void)fprintf(stderr,"zmtx: invalid acknowledgement position %" PRIu32
 			    " beyond sent position %" PRIu32 "\n",position,sent_position);
 		}
 		return false;
@@ -179,39 +269,33 @@ accept_acknowledgement(uint32_t sent_position,uint32_t * acknowledged)
  * zmtx: sending file "garbage" 4096 bytes ( 20%)
  */
 
-void
-show_progress(char * name,FILE * fp)
+static void
+show_progress(const char * name,int file_fd)
 
 {
-	double duration;
+	uintmax_t duration;
 	intmax_t cps;
 	int percentage;
 	off_t position;
 
-	position = ftello(fp);
+	if (!file_position(file_fd,&position)) {
+		position = (off_t)-1;
+	}
 
-	if (current_file_size > 0 && position >= 0) {
-		if (position >= current_file_size) {
-			percentage = 100;
+	percentage = 100;
+	if (current_file_size > 0) {
+		if (position >= 0) {
+			if (position < current_file_size) {
+				percentage = (int)(((uintmax_t)position * UINTMAX_C(100)) /
+				    (uintmax_t)current_file_size);
+			}
 		}
-		else {
-			percentage = (int)(100.0 * (double)position /
-				(double)current_file_size);
-		}
-	}
-	else {
-		percentage = 100;
 	}
 
-	duration = difftime(time(NULL),transfer_start);
+	duration = elapsed_seconds();
+	cps = position < 0 ? 0 : (intmax_t)((uintmax_t)position / duration);
 
-	if (duration <= 0.0) {
-		duration = 1.0;
-	}
-
-	cps = position < 0 ? 0 : (intmax_t)((double)position / duration);
-
-	fprintf(stderr,"sending file \"%s\" %8" PRIdMAX " bytes (%3d %%/%5" PRIdMAX " cps)\r",
+	(void)fprintf(stderr,"sending file \"%s\" %8" PRIdMAX " bytes (%3d %%/%5" PRIdMAX " cps)\r",
 		name,(intmax_t)position,percentage,cps);
 }
 
@@ -222,15 +306,16 @@ show_progress(char * name,FILE * fp)
  * the name is only used to show progress
  */
 
-int
-send_from(char * name,FILE * fp)
+static int
+send_from(const char * name,int file_fd)
 
 {
 	bool frame_open = false;
 	bool stop_after_ack;
-	bool window_enabled = window_size != 0 && can_full_duplex;
-	bool wait_each_block = opt_s || !can_overlap_io ||
-	    (window_size != 0 && !can_full_duplex);
+	bool end_of_file;
+	bool window_enabled = window_size != 0 && protocol.can_full_duplex;
+	bool wait_each_block = opt_s || !protocol.can_overlap_io ||
+	    (window_size != 0 && !protocol.can_full_duplex);
 	size_t n;
 	size_t read_size;
 	size_t segment_sent = 0;
@@ -240,8 +325,13 @@ send_from(char * name,FILE * fp)
 	uint32_t last_ack_request;
 	uint8_t zdata_frame[] = { ZDATA, 0, 0, 0, 0 };
 
-	position = ftello(fp);
-	if (position < 0 || (uintmax_t)position > UINT32_MAX) {
+	if (!file_position(file_fd,&position)) {
+		return ZFERR;
+	}
+	if (position < 0) {
+		return ZFERR;
+	}
+	if ((uintmax_t)position > UINT32_MAX) {
 		return ZFERR;
 	}
 	acknowledged_position = (uint32_t)position;
@@ -254,14 +344,19 @@ send_from(char * name,FILE * fp)
 		uint8_t frame_end;
 		uint32_t wire_position;
 
-		position = ftello(fp);
-		if (position < 0 || (uintmax_t)position > UINT32_MAX) {
+		if (!file_position(file_fd,&position)) {
+			return ZFERR;
+		}
+		if (position < 0) {
+			return ZFERR;
+		}
+		if ((uintmax_t)position > UINT32_MAX) {
 			return ZFERR;
 		}
 		wire_position = (uint32_t)position;
 		if (window_enabled) {
 			while (wire_position - acknowledged_position >= window_size) {
-				int type = rx_header(10000);
+				int type = rx_header(&protocol,10000);
 
 				if (type == ZACK) {
 					if (!accept_acknowledgement(wire_position,
@@ -275,67 +370,69 @@ send_from(char * name,FILE * fp)
 		}
 		if (!frame_open) {
 			zmodem_set_header_position(zdata_frame,wire_position);
-			if (tx_header(zdata_frame) != 0) {
+			if (tx_header(&protocol,zdata_frame) != 0) {
 				return ZFERR;
 			}
 			frame_open = true;
 		}
 
 		if (opt_v) {
-			show_progress(name,fp);
+			show_progress(name,file_fd);
 		}
 
 		/*
 		 * read a block from the file
 		 */
 		read_size = subpacket_size;
-		if (window_enabled &&
-		    read_size > window_size - (wire_position - acknowledged_position)) {
-			read_size = window_size - (wire_position - acknowledged_position);
+		if (window_enabled) {
+			if (read_size >
+			    window_size - (wire_position - acknowledged_position)) {
+				read_size = window_size -
+				    (wire_position - acknowledged_position);
+			}
 		}
-		if (receiver_buffer_size != 0 &&
-		    read_size > (size_t)receiver_buffer_size - segment_sent) {
-			read_size = (size_t)receiver_buffer_size - segment_sent;
+		if (receiver_buffer_size != 0U) {
+			if (read_size > (size_t)receiver_buffer_size - segment_sent) {
+				read_size = (size_t)receiver_buffer_size - segment_sent;
+			}
 		}
-		n = fread(tx_data_subpacket,1,read_size,fp);
-		if (ferror(fp)) {
-			(void)tx_pos_header(ZFERR,wire_position);
+		if (!read_file_block(file_fd,tx_data_subpacket,read_size,&n,
+		    &end_of_file)) {
+			(void)tx_pos_header(&protocol,ZFERR,wire_position);
 			return ZFERR;
 		}
-		if (n > UINT32_MAX || wire_position > UINT32_MAX - (uint32_t)n) {
-			(void)tx_pos_header(ZFERR,wire_position);
+		if (n > UINT32_MAX) {
+			(void)tx_pos_header(&protocol,ZFERR,wire_position);
+			return ZFERR;
+		}
+		if (wire_position > UINT32_MAX - (uint32_t)n) {
+			(void)tx_pos_header(&protocol,ZFERR,wire_position);
 			return ZFERR;
 		}
 		position += (off_t)n;
-		stop_after_ack = wait_each_block && n < read_size;
-		if (n == 0) {
+		stop_after_ack = wait_each_block && end_of_file;
+		if ((n == 0U) || (!wait_each_block && end_of_file)) {
 			frame_end = ZCRCE;
 		}
-		else if (wait_each_block) {
-			frame_end = ZCRCW;
-		}
-		else if (n < read_size) {
-			frame_end = ZCRCE;
-		}
-		else if (receiver_buffer_size != 0 &&
-		    segment_sent + n == receiver_buffer_size) {
+		else if (wait_each_block ||
+		    ((receiver_buffer_size != 0U) &&
+		    (segment_sent + n == receiver_buffer_size))) {
 			frame_end = ZCRCW;
 		}
 		else if (window_enabled &&
-		    ((uint32_t)position - last_ack_request >= acknowledgement_interval ||
-		    (uint32_t)position - acknowledged_position == window_size)) {
+		    (uint32_t)position - last_ack_request >= acknowledgement_interval) {
 			frame_end = ZCRCQ;
 		}
 		else {
 			frame_end = ZCRCG;
 		}
-		if (tx_data(frame_end,tx_data_subpacket,n) != 0) {
+		if (tx_data(&protocol,frame_end,tx_data_subpacket,n) != 0) {
 			return ZFERR;
 		}
 		if (frame_end == ZCRCE) {
 			current_file_size = position;
 			if (opt_d) {
-				fprintf(stderr,"end of file\n");
+				(void)fprintf(stderr,"end of file\n");
 			}
 			return ZACK;
 		}
@@ -345,9 +442,12 @@ send_from(char * name,FILE * fp)
 			int type;
 
 			for (;;) {
-				type = rx_header(10000);
-				if (type != ZACK ||
-				    zmodem_header_position(rxd_header) == (uint32_t)position) {
+				type = rx_header(&protocol,10000);
+				if (type != ZACK) {
+					break;
+				}
+				if (zmodem_header_position(protocol.rxd_header) ==
+				    (uint32_t)position) {
 					break;
 				}
 			}
@@ -374,12 +474,12 @@ send_from(char * name,FILE * fp)
 		 * check out that header
 		 */
 
-		while (rx_poll()) {
+		while (rx_poll(&protocol) > 0) {
 			int type;
 			int c;
-			c = rx_raw(1000);
+			c = rx_raw(&protocol,1000);
 			if ((c & 0x7f) == ZPAD) {
-				type = rx_header(1000);
+				type = rx_header(&protocol,1000);
 				if (type == ZACK) {
 					if (!accept_acknowledgement((uint32_t)position,
 					    &acknowledged_position)) {
@@ -401,29 +501,39 @@ send_from(char * name,FILE * fp)
  */
 
 static bool
-seek_sender(FILE * fp,uint32_t position)
+seek_sender(int file_fd,uint32_t position)
 
 {
 	off_t offset = (off_t)position;
 	struct stat s;
 
-	if (offset < 0 || (uintmax_t)offset != position ||
-	    fstat(fileno(fp),&s) != 0 || s.st_size < 0 ||
-	    (uintmax_t)position > (uintmax_t)s.st_size) {
+	if (offset < 0) {
 		return false;
 	}
-	return fseeko(fp,offset,SEEK_SET) == 0;
+	if ((uintmax_t)offset != position) {
+		return false;
+	}
+	if (fstat(file_fd,&s) != 0) {
+		return false;
+	}
+	if (s.st_size < 0) {
+		return false;
+	}
+	if ((uintmax_t)position > (uintmax_t)s.st_size) {
+		return false;
+	}
+	return lseek(file_fd,offset,SEEK_SET) == offset;
 }
 
-enum send_result
-send_file(char * name)
+static enum send_result
+send_file(const char * name)
 
 {
 	unsigned attempts;
 	uint32_t pos;
 	uint32_t size;
 	struct stat s;
-	FILE * fp;
+	int file_fd;
 	uintmax_t wire_mdate;
 	char * p;
 	size_t remaining;
@@ -431,37 +541,44 @@ send_file(char * name)
 	uint8_t zeof_frame[] = { ZEOF, 0, 0, 0, 0 };
 	int type;
 	int written;
-	char * n;
+	const char * n;
 
 	if (opt_v) {
-		fprintf(stderr,"zmtx: sending file \"%s\"\r",name);
+		(void)fprintf(stderr,"zmtx: sending file \"%s\"\r",name);
 	}
 
 	/*
 	 * before doing a lot of unnecessary work check if the file exists
 	 */
 
-	fp = fopen(name,"rb");
+	file_fd = open(name,O_RDONLY);
 
-	if (fp == NULL) {
+	if (file_fd < 0) {
 		if (opt_v) {
-			fprintf(stderr,"zmtx: can't open file %s\n",name);
+			(void)fprintf(stderr,"zmtx: can't open file %s\n",name);
 		}
 		return SEND_FAILED;
 	}
 
-	if (fstat(fileno(fp),&s) != 0) {
+	if (fstat(file_fd,&s) != 0) {
 		if (opt_v) {
-			fprintf(stderr,"zmtx: can't stat file %s\n",name);
+			(void)fprintf(stderr,"zmtx: can't stat file %s\n",name);
 		}
-		fclose(fp);
+		(void)close(file_fd);
 		return SEND_FAILED;
 	}
-	if (s.st_size < 0 || (uintmax_t)s.st_size > UINT32_MAX) {
+	if (s.st_size < 0) {
 		if (opt_v) {
-			fprintf(stderr,"zmtx: file is too large for ZMODEM: %s\n",name);
+			(void)fprintf(stderr,"zmtx: file is too large for ZMODEM: %s\n",name);
 		}
-		fclose(fp);
+		(void)close(file_fd);
+		return SEND_FAILED;
+	}
+	if ((uintmax_t)s.st_size > UINT32_MAX) {
+		if (opt_v) {
+			(void)fprintf(stderr,"zmtx: file is too large for ZMODEM: %s\n",name);
+		}
+		(void)close(file_fd);
 		return SEND_FAILED;
 	}
 	size = (uint32_t)s.st_size;
@@ -488,24 +605,24 @@ send_file(char * name)
 	 * management option
 	 */
 
-	if (management_protect) {
+	if (protocol.management_protect) {
 		zfile_frame[ZF1] = ZF1_ZMPROT;		
 		if (opt_d) {
-			fprintf(stderr,"zmtx: protecting destination\n");
+			(void)fprintf(stderr,"zmtx: protecting destination\n");
 		}
 	}
 
-	if (management_clobber) {
+	if (protocol.management_clobber) {
 		zfile_frame[ZF1] = ZF1_ZMCLOB;
 		if (opt_d) {
-			fprintf(stderr,"zmtx: overwriting destination\n");
+			(void)fprintf(stderr,"zmtx: overwriting destination\n");
 		}
 	}
 
-	if (management_newer) {
+	if (protocol.management_newer) {
 		zfile_frame[ZF1] = ZF1_ZMNEW;
 		if (opt_d) {
-			fprintf(stderr,"zmtx: overwriting destination if newer\n");
+			(void)fprintf(stderr,"zmtx: overwriting destination if newer\n");
 		}
 	}
 
@@ -546,7 +663,7 @@ send_file(char * name)
 	}
 
 	if (strlen(n) >= sizeof(tx_data_subpacket)) {
-		fclose(fp);
+		(void)close(file_fd);
 		return SEND_FAILED;
 	}
 	memcpy(p,n,strlen(n) + 1);
@@ -554,8 +671,12 @@ send_file(char * name)
 	remaining = sizeof(tx_data_subpacket) - (size_t)(p - (char *)tx_data_subpacket);
 	written = snprintf(p,remaining,"%" PRIu32 " %" PRIoMAX " 0 0 %d 0",
 		size,wire_mdate,n_files_remaining);
-	if (written < 0 || (size_t)written >= remaining) {
-		fclose(fp);
+	if (written < 0) {
+		(void)close(file_fd);
+		return SEND_FAILED;
+	}
+	if ((size_t)written >= remaining) {
+		(void)close(file_fd);
 		return SEND_FAILED;
 	}
 	p += (size_t)written + 1;
@@ -568,10 +689,13 @@ send_file(char * name)
 	 	 * send the header and the data
 	 	 */
 
-		if (tx_header(zfile_frame) != 0 ||
-		    tx_data(ZCRCW,tx_data_subpacket,
+		if (tx_header(&protocol,zfile_frame) != 0) {
+			(void)close(file_fd);
+			return SEND_FAILED;
+		}
+		if (tx_data(&protocol,ZCRCW,tx_data_subpacket,
 		    (size_t)(p - (char *)tx_data_subpacket)) != 0) {
-			fclose(fp);
+			(void)close(file_fd);
 			return SEND_FAILED;
 		}
 	
@@ -580,7 +704,7 @@ send_file(char * name)
 		 */
 
 		for (;;) {
-			type = rx_header(10000);
+			type = rx_header(&protocol,10000);
 			if (type == ZACK) {
 				continue;
 			}
@@ -593,13 +717,13 @@ send_file(char * name)
 		}
 
 		if (opt_d) {
-			fprintf(stderr,"type : %d\n",type);
+			(void)fprintf(stderr,"type : %d\n",type);
 		}
 
 		if (type == ZSKIP) {
-			fclose(fp);
+			(void)close(file_fd);
 			if (opt_v) {
-				fprintf(stderr,"zmtx: skipped file \"%s\"                       \n",name);
+				(void)fprintf(stderr,"zmtx: skipped file \"%s\"                       \n",name);
 			}
 			return SEND_SKIPPED;
 		}
@@ -608,105 +732,113 @@ send_file(char * name)
 		}
 	}
 	if (type != ZRPOS) {
-		fclose(fp);
+		(void)close(file_fd);
 		return SEND_FAILED;
 	}
 
-	transfer_start = time(NULL);
-	pos = zmodem_header_position(rxd_header);
+	transfer_clock_started =
+	    clock_gettime(CLOCK_MONOTONIC,&transfer_start) == 0;
+	pos = zmodem_header_position(protocol.rxd_header);
 
 	for (attempts=0;attempts<MAX_RETRIES;attempts++) {
 		unsigned finish_attempts;
 		bool resume = false;
 
-		if (!seek_sender(fp,pos)) {
-			(void)tx_pos_header(ZFERR,pos);
-			fclose(fp);
+		if (!seek_sender(file_fd,pos)) {
+			(void)tx_pos_header(&protocol,ZFERR,pos);
+			(void)close(file_fd);
 			return SEND_FAILED;
 		}
-		type = send_from(n,fp);
+		type = send_from(n,file_fd);
 		if (type == ZSKIP) {
-			fclose(fp);
+			(void)close(file_fd);
 			return SEND_SKIPPED;
 		}
 		if (type == ZRPOS) {
-			pos = zmodem_header_position(rxd_header);
+			pos = zmodem_header_position(protocol.rxd_header);
 			reduce_subpacket_size();
 			continue;
 		}
-		if (type == ZNAK || type == TIMEOUT) {
+		if (type == ZNAK) {
+			reduce_subpacket_size();
+			continue;
+		}
+		if (type == TIMEOUT) {
 			reduce_subpacket_size();
 			continue;
 		}
 		if (type != ZACK) {
-			fclose(fp);
+			(void)close(file_fd);
 			return SEND_FAILED;
 		}
 
-			zmodem_set_header_position(zeof_frame,(uint32_t)current_file_size);
+		zmodem_set_header_position(zeof_frame,(uint32_t)current_file_size);
 		for (finish_attempts=0;finish_attempts<MAX_RETRIES;finish_attempts++) {
-			if (tx_hex_header(zeof_frame) != 0) {
-				fclose(fp);
+			if (tx_hex_header(&protocol,zeof_frame) != 0) {
+				(void)close(file_fd);
 				return SEND_FAILED;
 			}
-			type = rx_header(10000);
+			type = rx_header(&protocol,10000);
 			if (type == ZRINIT) {
 				parse_zrinit();
-				fclose(fp);
+				(void)close(file_fd);
 				if (opt_v) {
-					fprintf(stderr,"zmtx: sent file \"%s\"                                    \n",name);
+					(void)fprintf(stderr,"zmtx: sent file \"%s\"                                    \n",name);
 				}
 				return SEND_SUCCEEDED;
 			}
 			if (type == ZRPOS) {
-				pos = zmodem_header_position(rxd_header);
+				pos = zmodem_header_position(protocol.rxd_header);
 				resume = true;
 				break;
 			}
 			if (type == ZSKIP) {
-				fclose(fp);
+				(void)close(file_fd);
 				return SEND_SKIPPED;
 			}
-			if (type != ZACK && type != TIMEOUT) {
-				fclose(fp);
+			if (type != ZACK) {
+				if (type == TIMEOUT) {
+					continue;
+				}
+				(void)close(file_fd);
 				return SEND_FAILED;
 			}
 		}
 		if (!resume) {
-			fclose(fp);
+			(void)close(file_fd);
 			return SEND_FAILED;
 		}
 	}
 
-	fclose(fp);
+	(void)close(file_fd);
 	return SEND_FAILED;
 }
 
-void
+static void
 cleanup(void)
 
 {
-	fd_exit();
+	zmodem_posix_io_close(&posix_io);
 }
 
-void
+static void
 usage(void)
 
 {
-	printf("zmtx %s Copyright (c) 1994 Stephen Hurd\n",VERSION);
-	printf("usage : zmtx options files\n");
-	printf("	-lline      line to use for io\n");
-	printf("	-4          use ZedZap 4 KiB data subpackets\n");
-	printf("	-8          use ZedZap 8 KiB data subpackets\n");
-	printf("	-s          wait for an acknowledgement after each block\n");
-	printf("	-wbytes     limit unacknowledged data (K and M suffixes allowed)\n");
-	printf("	-n          transfer if source is newer\n");
-	printf("	-o          overwrite if exists\n");
-	printf("	-p          protect (don't overwrite if exists)\n");
-	printf("\n");
-	printf("	-d          debug output\n");
-	printf("	-v          verbose output\n");
-	printf("	(only one of -n -c or -p may be specified)\n");
+	(void)printf("zmtx %s Copyright (c) 1994 Stephen Hurd\n",VERSION);
+	(void)printf("usage : zmtx options files\n");
+	(void)printf("	-lline      line to use for io\n");
+	(void)printf("	-4          use ZedZap 4 KiB data subpackets\n");
+	(void)printf("	-8          use ZedZap 8 KiB data subpackets\n");
+	(void)printf("	-s          wait for an acknowledgement after each block\n");
+	(void)printf("	-wbytes     limit unacknowledged data (K and M suffixes allowed)\n");
+	(void)printf("	-n          transfer if source is newer\n");
+	(void)printf("	-o          overwrite if exists\n");
+	(void)printf("	-p          protect (don't overwrite if exists)\n");
+	(void)printf("\n");
+	(void)printf("	-d          debug output\n");
+	(void)printf("	-v          verbose output\n");
+	(void)printf("	(only one of -n -c or -p may be specified)\n");
 
 	cleanup();
 
@@ -719,31 +851,64 @@ main(int argc,char ** argv)
 {
 	bool transfer_failed = false;
 	int i;
-	char * s;
+	struct zmodem_io io;
 
-	(void)signal(SIGPIPE,SIG_IGN);
+	if (zmodem_posix_ignore_sigpipe() != 0) {
+		(void)fprintf(stderr,"zmtx: can't configure broken-pipe handling\n");
+		return 2;
+	}
+	zmodem_posix_io_init(&posix_io,STDIN_FILENO,STDOUT_FILENO);
+	zmodem_posix_io_bind(&io,&posix_io);
+	if (zmodem_init(&protocol,&io) != ZMODEM_OK) {
+		(void)fprintf(stderr,"zmtx: can't initialize protocol state\n");
+		return 2;
+	}
 
 	argv++;
 	while (--argc > 0 && ((*argv)[0] == '-')) {
-		for (s = argv[0]+1; *s != '\0'; s++) {
-			switch (toupper((unsigned char)*s)) {
+		const char * argument = argv[0];
+		size_t option_index;
+
+		for (option_index = 1U; argument[option_index] != '\0';
+		    option_index++) {
+			int option = toupper((unsigned char)argument[option_index]);
+
+			switch (option) {
 				case '4':
-					max_subpacket_size = 4096;
+					max_subpacket_size = 4096U;
 					break;
 				case '8':
 					max_subpacket_size = ZMAXSPLEN;
 					break;
-				OPT_BOOL('D',opt_d);
-				OPT_BOOL('V',opt_v);
-				OPT_BOOL('S',opt_s);
-				OPT_STRING('W',window_argument);
-
-				OPT_BOOL('N',management_newer);
-				OPT_BOOL('O',management_clobber);
-				OPT_BOOL('P',management_protect);
-				OPT_STRING('L',line);
+				case 'D':
+					opt_d = true;
+					break;
+				case 'V':
+					opt_v = true;
+					break;
+				case 'S':
+					opt_s = true;
+					break;
+				case 'W':
+					window_argument = (char *)&argument[option_index + 1U];
+					option_index = strlen(argument) - 1U;
+					break;
+				case 'N':
+					protocol.management_newer = true;
+					break;
+				case 'O':
+					protocol.management_clobber = true;
+					break;
+				case 'P':
+					protocol.management_protect = true;
+					break;
+				case 'L':
+					line = (char *)&argument[option_index + 1U];
+					option_index = strlen(argument) - 1U;
+					break;
 				default:
-					printf("zmtx: bad option %c\n",*s);
+					(void)printf("zmtx: bad option %c\n",
+					    argument[option_index]);
 					usage();
 			}
 		}
@@ -756,25 +921,23 @@ main(int argc,char ** argv)
 	if (window_argument != NULL &&
 	    (!parse_window_size(window_argument,&window_size) ||
 	    window_size < 4 * max_subpacket_size)) {
-		fprintf(stderr,"zmtx: window must hold at least four maximum-size blocks\n");
+		(void)fprintf(stderr,"zmtx: window must hold at least four maximum-size blocks\n");
 		usage();
 	}
 	if (opt_s && window_size != 0) {
-		fprintf(stderr,"zmtx: -s and -w cannot be used together\n");
+		(void)fprintf(stderr,"zmtx: -s and -w cannot be used together\n");
 		usage();
 	}
 
-	if ((management_newer + management_clobber + management_protect) > 1 || argc == 0) {
+	if (((unsigned)protocol.management_newer +
+	    (unsigned)protocol.management_clobber +
+	    (unsigned)protocol.management_protect) > 1U || argc == 0) {
 		usage();
 	}
 
-	if (line != NULL) {	
-		if (freopen(line,"r",stdin) == NULL) {
-			fprintf(stderr,"zmtx can't open line for input %s\n",line);
-			exit(2);
-		}
-		if (freopen(line,"w",stdout) == NULL) {
-			fprintf(stderr,"zmtx can't open line for output %s\n",line);
+	if (line != NULL) {
+		if (zmodem_posix_io_open(&posix_io,line) != 0) {
+			(void)fprintf(stderr,"zmtx can't open line for input/output %s\n",line);
 			exit(2);
 		}
 	}
@@ -783,7 +946,11 @@ main(int argc,char ** argv)
 	 * set the io device to transparent
 	 */
 
-	fd_init();	
+	if (zmodem_posix_io_make_raw(&posix_io) != 0) {
+		(void)fprintf(stderr,"zmtx: can't configure transfer line\n");
+		cleanup();
+		return 2;
+	}
 
 	/*
 	 * clear the input queue from any possible garbage
@@ -793,14 +960,18 @@ main(int argc,char ** argv)
 	 * ZRINIT we are about to wipe has already died.
 	 */
 
-	rx_purge();
+	if (rx_purge(&protocol) != ZMODEM_OK) {
+		(void)fprintf(stderr,"zmtx: can't purge transfer input\n");
+		cleanup();
+		return 3;
+	}
 
 	/*
 	 * establish contact with the receiver
 	 */
 
 	if (opt_v) {
-		fprintf(stderr,"zmtx: establishing contact with receiver\n");
+		(void)fprintf(stderr,"zmtx: establishing contact with receiver\n");
 	}
 
 	i = 0;
@@ -808,22 +979,36 @@ main(int argc,char ** argv)
 		uint8_t zrqinit_header[] = { ZRQINIT, 0, 0, 0, 0 };
 		i++;
 		if (i > 10) {
-			fprintf(stderr,"zmtx: can't establish contact with receiver\n");
+			(void)fprintf(stderr,"zmtx: can't establish contact with receiver\n");
 			cleanup();
 			exit(3);
 		}
 
-		if (tx_raw('z') != 0 || tx_raw('m') != 0 || tx_raw(CR) != 0 ||
-		    tx_hex_header(zrqinit_header) != 0) {
-			fprintf(stderr,"zmtx: output error establishing contact\n");
+		if (tx_raw(&protocol,'z') != 0) {
+			(void)fprintf(stderr,"zmtx: output error establishing contact\n");
 			cleanup();
 			exit(3);
 		}
-	} while (rx_header(7000) != ZRINIT);
+		if (tx_raw(&protocol,'m') != 0) {
+			(void)fprintf(stderr,"zmtx: output error establishing contact\n");
+			cleanup();
+			exit(3);
+		}
+		if (tx_raw(&protocol,CR) != 0) {
+			(void)fprintf(stderr,"zmtx: output error establishing contact\n");
+			cleanup();
+			exit(3);
+		}
+		if (tx_hex_header(&protocol,zrqinit_header) != 0) {
+			(void)fprintf(stderr,"zmtx: output error establishing contact\n");
+			cleanup();
+			exit(3);
+		}
+	} while (rx_header(&protocol,7000) != ZRINIT);
 
 	if (opt_v) {
-		fprintf(stderr,"zmtx: contact established\n");
-		fprintf(stderr,"zmtx: starting file transfer\n");
+		(void)fprintf(stderr,"zmtx: contact established\n");
+		(void)fprintf(stderr,"zmtx: starting file transfer\n");
 	}
 
 	/*
@@ -832,19 +1017,23 @@ main(int argc,char ** argv)
 	 */
 
 	parse_zrinit();
-	if (window_size != 0 && !can_full_duplex && opt_v) {
-		fprintf(stderr,"zmtx: receiver is not full duplex; using one-block acknowledgements\n");
+	if (window_size != 0U) {
+		if (!protocol.can_full_duplex) {
+			if (opt_v) {
+				(void)fprintf(stderr,"zmtx: receiver is not full duplex; using one-block acknowledgements\n");
+			}
+		}
 	}
 
 	if (opt_d) {
-		fprintf(stderr,"receiver %s full duplex\n"          ,can_full_duplex               ? "can"      : "can't");
-		fprintf(stderr,"receiver %s overlap io\n"           ,can_overlap_io                ? "can"      : "can't");
-		fprintf(stderr,"receiver %s break\n"                ,can_break                     ? "can"      : "can't");
-		fprintf(stderr,"receiver %s fcs 32\n"               ,can_fcs_32                    ? "can"      : "can't");
-		fprintf(stderr,"receiver %s escaped control chars\n",escape_all_control_characters ? "requests" : "doesn't request");
-		fprintf(stderr,"receiver %s escaped 8th bit\n"      ,escape_8th_bit                ? "requests" : "doesn't request");
-		fprintf(stderr,"receiver %s use variable headers\n" ,use_variable_headers          ? "can"      : "can't");
-		fprintf(stderr,"receiver buffer size: %" PRIu16 " bytes\n",receiver_buffer_size);
+		(void)fprintf(stderr,"receiver %s full duplex\n"          ,protocol.can_full_duplex               ? "can"      : "can't");
+		(void)fprintf(stderr,"receiver %s overlap io\n"           ,protocol.can_overlap_io                ? "can"      : "can't");
+		(void)fprintf(stderr,"receiver %s break\n"                ,protocol.can_break                     ? "can"      : "can't");
+		(void)fprintf(stderr,"receiver %s fcs 32\n"               ,protocol.can_fcs_32                    ? "can"      : "can't");
+		(void)fprintf(stderr,"receiver %s escaped control chars\n",protocol.escape_all_control_characters ? "requests" : "doesn't request");
+		(void)fprintf(stderr,"receiver %s escaped 8th bit\n"      ,protocol.escape_8th_bit                ? "requests" : "doesn't request");
+		(void)fprintf(stderr,"receiver %s use variable headers\n" ,protocol.use_variable_headers          ? "can"      : "can't");
+		(void)fprintf(stderr,"receiver buffer size: %" PRIu16 " bytes\n",receiver_buffer_size);
 	}
 
 	/* 
@@ -858,7 +1047,7 @@ main(int argc,char ** argv)
 
 		if (result == SEND_FAILED) {
 			if (opt_v) {
-				fprintf(stderr,"zmtx: transfer failed.\n");
+				(void)fprintf(stderr,"zmtx: transfer failed.\n");
 			}
 			transfer_failed = true;
 			break;
@@ -874,7 +1063,7 @@ main(int argc,char ** argv)
 	 */
 
 	if (opt_v) {
-		fprintf(stderr,"zmtx: closing the session\n");
+		(void)fprintf(stderr,"zmtx: closing the session\n");
 	}
 
 	{
@@ -884,11 +1073,11 @@ main(int argc,char ** argv)
 
 		type = TIMEOUT;
 		for (attempts=0;attempts<MAX_RETRIES;attempts++) {
-			if (tx_hex_header(zfin_header) != 0) {
+			if (tx_hex_header(&protocol,zfin_header) != 0) {
 				transfer_failed = true;
 				break;
 			}
-			type = rx_header(10000);
+			type = rx_header(&protocol,10000);
 			if (type == ZFIN) {
 				break;
 			}
@@ -901,7 +1090,16 @@ main(int argc,char ** argv)
 		 */
 
 		if (type == ZFIN) {
-			if (tx_raw('O') != 0 || tx_raw('O') != 0 || tx_flush() != 0) {
+			int finish_result;
+
+			finish_result = tx_raw(&protocol,'O');
+			if (finish_result == 0) {
+				finish_result = tx_raw(&protocol,'O');
+			}
+			if (finish_result == 0) {
+				finish_result = tx_flush(&protocol);
+			}
+			if (finish_result != 0) {
 				transfer_failed = true;
 			}
 		}
@@ -915,7 +1113,7 @@ main(int argc,char ** argv)
 	 */
 
 	if (opt_d) {
-		fprintf(stderr,"zmtx: cleanup and exit\n");
+		(void)fprintf(stderr,"zmtx: cleanup and exit\n");
 	}
 
 	cleanup();

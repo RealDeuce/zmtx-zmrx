@@ -20,29 +20,58 @@ PYTHON ?= python3
 
 all:	zmtx zmrx
 
-check: all tests/test_crc
+check: all tests/test_crc tests/test_zmdm tests/test_posix_io
 	./tests/test_crc
+	./tests/test_zmdm
+	./tests/test_posix_io
 	$(PYTHON) tests/test_zmodem.py
 
 check-install: all
 	MAKE='$(MAKE)' sh tests/test_install.sh
+
+check-static:
+	$(PYTHON) tests/run_quality.py static
+
+check-sanitize:
+	$(PYTHON) tests/run_quality.py sanitize
+
+check-fuzz:
+	$(PYTHON) tests/run_quality.py fuzz
+
+coverage:
+	$(PYTHON) tests/run_quality.py coverage
+
+quality: check check-install check-static check-sanitize check-fuzz coverage
 
 tests/test_crc: tests/test_crc.c crctab.o crctab.h
 	$(CC) $(CPPFLAGS) $(CFLAGS) -I. \
 	    tests/test_crc.c crctab.o $(LDFLAGS) $(LDLIBS) $(LIBS) \
 	    -o tests/test_crc
 
-zmtx:	zmtx.o zmdm.o crctab.o
-	$(CC) $(LDFLAGS) zmtx.o zmdm.o crctab.o $(LDLIBS) $(LIBS) -o zmtx
+tests/test_zmdm: tests/test_zmdm.c zmdm.o crctab.o zmdm.h zmodem.h crctab.h
+	$(CC) $(CPPFLAGS) $(CFLAGS) -I. \
+	    tests/test_zmdm.c zmdm.o crctab.o $(LDFLAGS) $(LDLIBS) $(LIBS) \
+	    -o tests/test_zmdm
 
-zmrx:	zmrx.o zmdm.o crctab.o
-	$(CC) $(LDFLAGS) zmrx.o zmdm.o crctab.o $(LDLIBS) $(LIBS) -o zmrx
+tests/test_posix_io: tests/test_posix_io.c zmdm_posix.o zmdm_posix.h zmdm.h
+	$(CC) $(CPPFLAGS) $(CFLAGS) -I. \
+	    tests/test_posix_io.c zmdm_posix.o $(LDFLAGS) $(LDLIBS) $(LIBS) \
+	    -o tests/test_posix_io
 
-zmtx.o:	zmtx.c version.h zmodem.h zmdm.h opts.h
-zmrx.o:	zmrx.c version.h zmodem.h zmdm.h opts.h
+zmtx:	zmtx.o zmdm.o zmdm_posix.o crctab.o
+	$(CC) $(LDFLAGS) zmtx.o zmdm.o zmdm_posix.o crctab.o \
+	    $(LDLIBS) $(LIBS) -o zmtx
+
+zmrx:	zmrx.o zmdm.o zmdm_posix.o crctab.o
+	$(CC) $(LDFLAGS) zmrx.o zmdm.o zmdm_posix.o crctab.o \
+	    $(LDLIBS) $(LIBS) -o zmrx
+
+zmtx.o:	zmtx.c version.h zmodem.h zmdm.h zmdm_posix.h
+zmrx.o:	zmrx.c version.h zmodem.h zmdm.h zmdm_posix.h
 
 zmdm.o:		zmdm.c zmodem.h zmdm.h crctab.h
-crctab.o:	crctab.c crctab.h
+zmdm_posix.o:	zmdm_posix.c zmdm_posix.h zmdm.h
+crctab.o:	crctab.c crctab.h crctab_slicing.h
 
 .c.o:
 	$(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
@@ -61,6 +90,7 @@ uninstall:
 	    "$(DESTDIR)$(MANDIR)/man1/zmrx.1"
 
 clean:
-	rm -f *.o zmtx zmrx tests/test_crc
+	rm -f *.o zmtx zmrx tests/test_crc tests/test_zmdm tests/test_posix_io
 
-.PHONY: all check check-install install install-strip uninstall clean
+.PHONY: all check check-install check-static check-sanitize check-fuzz \
+	coverage quality install install-strip uninstall clean

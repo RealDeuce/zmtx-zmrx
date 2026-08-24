@@ -2,4 +2,6 @@
 /zmtx
 /zmrx
 /tests/test_crc
+/tests/test_posix_io
+/tests/test_zmdm
 /tests/__pycache__/
