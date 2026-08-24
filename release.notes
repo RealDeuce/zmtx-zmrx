@@ -25,6 +25,27 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 Special thanks to Jacques Mattheij, formerly of Mattheij Computer Service,
 and original author of zmtx/zmrx.
 
+2.01 release notes (24/08/26)
+
+This maintenance release improves packaging and documentation without
+changing ZMODEM transfer behaviour. The makefile now provides install,
+install-strip and uninstall targets with staged installation through DESTDIR.
+GNU and BSD path, installation and stripping conventions are supported, while
+compiler, linker, hardening, library and test-interpreter settings remain
+overridable by packagers. Binaries and manual pages install with conventional
+0555 and 0444 permissions.
+
+The programmer-oriented ZMODEM protocol reference has been renamed to
+ZMODEM.md and carefully converted to GitHub-flavoured Markdown. It now has a
+linked table of contents, structured headings, packet diagrams, tables, code
+blocks and compatibility and security callouts. Obvious transcription errors
+were corrected while the license and special acknowledgement remain intact.
+
+A GitHub Pages site now provides a concise introduction to the tools and their
+history, including the 2015 transfer of the original author's copyright. The
+README is shorter and links to the standalone license instead of reproducing
+it in full.
+
 2.00 release notes (24/08/26)
 
 This release incorporates applicable bug fixes from the Synchronet ZMODEM
