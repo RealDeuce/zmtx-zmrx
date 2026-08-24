@@ -56,7 +56,7 @@
 bool receive_32_bit_data;
 bool raw_trace;
 bool want_fcs_32 = true;
-static uint8_t inputbuffer[1024];
+static uint8_t inputbuffer[2 * ZMAXSPLEN];
 static size_t n_in_inputbuffer;
 static size_t inputbuffer_index;
 static bool termios_saved;
@@ -422,8 +422,23 @@ tx_data(uint8_t sub_frame_type,const uint8_t * p,size_t l)
 	if (l > ZMAXSPLEN) {
 		return -1;
 	}
-	for (i=0;i<l;i++) {
-		buffer_tx(p[i],&used,&previous,active);
+	if (active == TX_ESCAPE_ALWAYS) {
+		for (i=0;i<l;i++) {
+			uint8_t c = p[i];
+
+			if (tx_classes[c] == TX_ESCAPE_ALWAYS) {
+				buffer_raw(ZDLE,&used,&previous);
+				buffer_raw((uint8_t)(c ^ 0x40),&used,&previous);
+			}
+			else {
+				buffer_raw(c,&used,&previous);
+			}
+		}
+	}
+	else {
+		for (i=0;i<l;i++) {
+			buffer_tx(p[i],&used,&previous,active);
+		}
 	}
 	buffer_raw(ZDLE,&used,&previous);
 	buffer_raw(sub_frame_type,&used,&previous);
@@ -621,8 +636,7 @@ rx_raw(int to)
  * is relatively short.
  */
 
-static
-int
+static inline int
 rx(int to)
 
 {

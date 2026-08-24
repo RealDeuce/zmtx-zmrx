@@ -330,32 +330,36 @@ class ZmodemTests(unittest.TestCase):
                     process.kill()
                     process.wait()
 
-    def test_sender_preserves_all_bytes_with_control_escaping(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            byte_cases = b"".join(
-                bytes((ord("@"), value, ord("A"), value))
-                for value in range(256)
-            )
-            payload = byte_cases * 20 + b"sentinel"
-            source = Path(temporary) / "escaping.bin"
-            source.write_bytes(payload)
-            process, peer, zrinit = self.start_sender(
-                temporary, source.name, "-8", flags=3 | 0x40)
-            try:
-                frame_type, position, _ = peer.header()
-                self.assertEqual((frame_type, position), (ZDATA, 0))
-                received = bytearray()
-                frame_end = ZCRCG
-                while frame_end == ZCRCG:
-                    chunk, frame_end = peer.data()
-                    received.extend(chunk)
-                self.assertEqual((bytes(received), frame_end), (payload, ZCRCE))
-                self.finish_sender(peer, process, zrinit, len(payload))
-            finally:
-                peer.sock.close()
-                if process.poll() is None:
-                    process.kill()
-                    process.wait()
+    def test_sender_preserves_all_bytes_with_negotiated_escaping(self):
+        for escape_control in (False, True):
+            with self.subTest(escape_control=escape_control), \
+                    tempfile.TemporaryDirectory() as temporary:
+                byte_cases = b"".join(
+                    bytes((ord("@"), value, ord("A"), value))
+                    for value in range(256)
+                )
+                payload = byte_cases * 20 + b"sentinel"
+                source = Path(temporary) / "escaping.bin"
+                source.write_bytes(payload)
+                flags = 3 | (0x40 if escape_control else 0)
+                process, peer, zrinit = self.start_sender(
+                    temporary, source.name, "-8", flags=flags)
+                try:
+                    frame_type, position, _ = peer.header()
+                    self.assertEqual((frame_type, position), (ZDATA, 0))
+                    received = bytearray()
+                    frame_end = ZCRCG
+                    while frame_end == ZCRCG:
+                        chunk, frame_end = peer.data()
+                        received.extend(chunk)
+                    self.assertEqual(
+                        (bytes(received), frame_end), (payload, ZCRCE))
+                    self.finish_sender(peer, process, zrinit, len(payload))
+                finally:
+                    peer.sock.close()
+                    if process.poll() is None:
+                        process.kill()
+                        process.wait()
 
     def test_receiver_requests_non_streaming_mode(self):
         with tempfile.TemporaryDirectory() as temporary:
