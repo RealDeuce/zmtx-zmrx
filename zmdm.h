@@ -45,9 +45,9 @@
 
 
 #include <errno.h>
-
-#define TRUE  1
-#define FALSE 0
+#include <stdbool.h>
+#include <stddef.h>
+#include <stdint.h>
 
 #define ENDOFFRAME 2
 #define FRAMEOK    1
@@ -60,31 +60,31 @@
 
 EXTERN int in_fp;												/* input file descriptor */
 EXTERN int out_fp;												/* output file descriptor */
-EXTERN unsigned char rxd_header[ZMAXHLEN];						/* last received header */
-EXTERN int rxd_header_len;										/* last received header size */
+EXTERN uint8_t rxd_header[ZMAXHLEN];							/* last received header */
+EXTERN size_t rxd_header_len;									/* last received header size */
 
 /*
  * receiver capability flags
  * extracted from the ZRINIT frame as received
  */
 
-EXTERN int can_full_duplex;
-EXTERN int can_overlap_io;
-EXTERN int can_break;
-EXTERN int can_fcs_32;
-EXTERN int escape_all_control_characters;						/* guess */
-EXTERN int escape_8th_bit;
+EXTERN bool can_full_duplex;
+EXTERN bool can_overlap_io;
+EXTERN bool can_break;
+EXTERN bool can_fcs_32;
+EXTERN bool escape_all_control_characters;					/* guess */
+EXTERN bool escape_8th_bit;
 
-EXTERN int use_variable_headers;								/* use variable length headers */
+EXTERN bool use_variable_headers;							/* use variable length headers */
 
 /*
  * file management options.
  * only one should be on
  */
 
-EXTERN int management_newer;
-EXTERN int management_clobber;
-EXTERN int management_protect;
+EXTERN bool management_newer;
+EXTERN bool management_clobber;
+EXTERN bool management_protect;
 
 void
 fd_init(void);													/* make the io channel raw */
@@ -92,20 +92,23 @@ fd_init(void);													/* make the io channel raw */
 void
 fd_exit(void);													/* reset io channel to state before zmtx was called */
 
-void
-tx_hheader(unsigned char * buf,int n);
-
-void
-tx_bheader(unsigned char * buf,int n);
-
 int rx_poll(void);
 void rx_purge(void);
-inline int rx_raw(int);
+int rx_raw(int);
+int rx_data(uint8_t *, size_t *);
+int rx_header_and_check(int);
 
-void tx_data(int, unsigned char *, int);
-void tx_header(unsigned char *);
-void tx_hex_header(unsigned char *);
+uint32_t zmodem_header_position(const uint8_t *);
+void zmodem_set_header_position(uint8_t *, uint32_t);
+
+void cleanup(void);
+
+void tx_data(uint8_t, const uint8_t *, size_t);
+void tx_header(const uint8_t *);
+void tx_hex_header(const uint8_t *);
+void tx_pos_header(uint8_t, uint32_t);
 void tx_raw(int);
+void tx_znak(void);
 
 int
 rx_header(int to);												/* receive any header with timeout in milliseconds */

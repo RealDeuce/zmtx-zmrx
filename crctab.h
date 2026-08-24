@@ -11,11 +11,15 @@
  * wow ! a whole macro ! lets copyright it.....
  */
 
-extern unsigned short int  crc16tab[0x100];
-extern unsigned long crc32tab[0x100];
+#include <stdint.h>
 
-#define UPDCRC16(cp, crc) (crc16tab[((crc >> 8) & 255)] ^ (crc << 8) ^ cp)
+extern const uint16_t crc16tab[0x100];
+extern const uint32_t crc32tab[0x100];
 
-#define UPDCRC32(b, c)    (crc32tab[((int)c ^ b) & 0xff] ^ ((c >> 8) & 0x00FFFFFF))
+#define UPDCRC16(cp, crc) \
+	((uint16_t)(crc16tab[((uint16_t)(crc) >> 8) & UINT16_C(0xff)] ^ \
+	((uint32_t)(uint16_t)(crc) << 8) ^ (uint8_t)(cp)))
 
-
+#define UPDCRC32(b, c) \
+	(crc32tab[((uint32_t)(c) ^ (uint8_t)(b)) & UINT32_C(0xff)] ^ \
+	((uint32_t)(c) >> 8))

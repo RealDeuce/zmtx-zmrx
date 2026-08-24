@@ -41,13 +41,8 @@
 #include <termios.h>
 #include <unistd.h>
 #include <signal.h>
-#ifdef UNITE
-#include <sys/select.h>
-#endif
-#ifdef SUNOS4
 #include <sys/types.h>
-#endif
-
+#include <sys/select.h>
 #include <sys/time.h>
 
 #include "zmodem.h"
@@ -59,10 +54,10 @@
 #define DEBUG
 #endif
 
-int receive_32_bit_data;
-int raw_trace;
-int want_fcs_32 = TRUE;
-long ack_file_pos;				/* file position used in acknowledgement of correctly */
+bool receive_32_bit_data;
+bool raw_trace;
+bool want_fcs_32 = true;
+uint32_t ack_file_pos;			/* file position used in acknowledgement of correctly */
 								/* received data subpackets */
 
 /*
@@ -73,7 +68,7 @@ long ack_file_pos;				/* file position used in acknowledgement of correctly */
 struct termios old_termios;
 
 void
-fd_init()
+fd_init(void)
 
 {
 	struct termios t;
@@ -94,7 +89,7 @@ fd_init()
 }
 
 void
-fd_exit()
+fd_exit(void)
 
 {
 	tcsetattr(0,TCSANOW,&old_termios);
@@ -111,7 +106,7 @@ rx_purge(void)
 {
 	struct timeval t;
 	fd_set f;
-	unsigned char c;
+	uint8_t c;
 
 	t.tv_sec = 0;
 	t.tv_usec = 0;
@@ -167,7 +162,7 @@ tx_esc(int c)
  */
 
 void
-tx(unsigned char c)
+tx(uint8_t c)
 
 {
 	switch (c) {
@@ -245,11 +240,11 @@ tx_hex(int h)
 }
 
 void
-tx_hex_header(unsigned char * p)
+tx_hex_header(const uint8_t * p)
 
 {
-	int i;
-	unsigned short int crc;
+	size_t i;
+	uint16_t crc;
 
 #ifdef DEBUG
 	fprintf(stderr,"tx_hheader : ");
@@ -318,15 +313,15 @@ tx_hex_header(unsigned char * p)
  */
 
 void
-tx_bin32_header(unsigned char * p)
+tx_bin32_header(const uint8_t * p)
 
 {
-	int i;
-	unsigned long crc;
+	size_t i;
+	uint32_t crc;
 
 #ifdef DEBUG
 	fprintf(stderr,"tx binary header 32 bits crc\n");
-	raw_trace = 1;
+	raw_trace = true;
 #endif
 
 	tx_raw(ZPAD);
@@ -341,7 +336,7 @@ tx_bin32_header(unsigned char * p)
 		tx_raw(ZBIN32);
 	}
 
-	crc = 0xffffffffL;
+	crc = UINT32_MAX;
 
 	for (i=0;i<HDRLEN;i++) {
 		crc = UPDCRC32(*p,crc);
@@ -350,18 +345,18 @@ tx_bin32_header(unsigned char * p)
 
 	crc = ~crc;
 
-	tx(crc);
-	tx(crc >> 8);
-	tx(crc >> 16);
-	tx(crc >> 24);
+	tx((uint8_t)crc);
+	tx((uint8_t)(crc >> 8));
+	tx((uint8_t)(crc >> 16));
+	tx((uint8_t)(crc >> 24));
 }
 
 void
-tx_bin16_header(unsigned char * p)
+tx_bin16_header(const uint8_t * p)
 
 {
-	int i;
-	unsigned int crc;
+	size_t i;
+	uint16_t crc;
 
 #ifdef DEBUG
 	fprintf(stderr,"tx binary header 16 bits crc\n");
@@ -389,8 +384,8 @@ tx_bin16_header(unsigned char * p)
 	crc = UPDCRC16(0,crc);
 	crc = UPDCRC16(0,crc);
 
-	tx(crc >> 8);
-	tx(crc);
+	tx((uint8_t)(crc >> 8));
+	tx((uint8_t)crc);
 }
 
 
@@ -402,7 +397,7 @@ tx_bin16_header(unsigned char * p)
  */
 
 void
-tx_header(unsigned char * p)
+tx_header(const uint8_t * p)
 
 {
 	if (can_fcs_32) {
@@ -423,17 +418,16 @@ tx_header(unsigned char * p)
  */
 
 void
-tx_32_data(int sub_frame_type,unsigned char * p,int l)
+tx_32_data(uint8_t sub_frame_type,const uint8_t * p,size_t l)
 
 {
-	int c;
-	unsigned long crc;
+	uint32_t crc;
 
 #ifdef DEBUG
 	fprintf(stderr,"tx_32_data\n");
 #endif
 
-	crc = 0xffffffffl;
+	crc = UINT32_MAX;
 
 	while (l > 0) {
 		crc = UPDCRC32(*p,crc);
@@ -448,17 +442,17 @@ tx_32_data(int sub_frame_type,unsigned char * p,int l)
 
 	crc = ~crc;
 
-	tx((int) (crc      ) & 0xff);
-	tx((int) (crc >> 8 ) & 0xff);
-	tx((int) (crc >> 16) & 0xff);
-	tx((int) (crc >> 24) & 0xff);
+	tx((uint8_t)crc);
+	tx((uint8_t)(crc >> 8));
+	tx((uint8_t)(crc >> 16));
+	tx((uint8_t)(crc >> 24));
 }
 
 void
-tx_16_data(int sub_frame_type,unsigned char * p,int l)
+tx_16_data(uint8_t sub_frame_type,const uint8_t * p,size_t l)
 
 {
-	unsigned short crc;
+	uint16_t crc;
 
 #ifdef DEBUG
 	fprintf(stderr,"tx_16_data\n");
@@ -480,8 +474,8 @@ tx_16_data(int sub_frame_type,unsigned char * p,int l)
 	crc = UPDCRC16(0,crc);
 	crc = UPDCRC16(0,crc);
 
-	tx(crc >> 8);
-	tx(crc);
+	tx((uint8_t)(crc >> 8));
+	tx((uint8_t)crc);
 }
 
 /*
@@ -489,7 +483,7 @@ tx_16_data(int sub_frame_type,unsigned char * p,int l)
  */
 
 void
-tx_data(int sub_frame_type,unsigned char * p, int l)
+tx_data(uint8_t sub_frame_type,const uint8_t * p,size_t l)
 
 {
 	if (want_fcs_32 && can_fcs_32) {
@@ -506,23 +500,40 @@ tx_data(int sub_frame_type,unsigned char * p, int l)
 	tx_flush();
 }
 
-void
-tx_pos_header(int type,long pos) 
+uint32_t
+zmodem_header_position(const uint8_t * header)
 
 {
-	char header[5];
+	return (uint32_t)header[ZP0] |
+		((uint32_t)header[ZP1] << 8) |
+		((uint32_t)header[ZP2] << 16) |
+		((uint32_t)header[ZP3] << 24);
+}
 
-	header[0]   = type;
-	header[ZP0] =  pos        & 0xff;
-	header[ZP1] = (pos >>  8) & 0xff;
-	header[ZP2] = (pos >> 16) & 0xff;
-	header[ZP3] = (pos >> 24) & 0xff;
+void
+zmodem_set_header_position(uint8_t * header,uint32_t position)
+
+{
+	header[ZP0] = (uint8_t)position;
+	header[ZP1] = (uint8_t)(position >> 8);
+	header[ZP2] = (uint8_t)(position >> 16);
+	header[ZP3] = (uint8_t)(position >> 24);
+}
+
+void
+tx_pos_header(uint8_t type,uint32_t position)
+
+{
+	uint8_t header[HDRLEN] = { 0 };
+
+	header[FTYPE] = type;
+	zmodem_set_header_position(header,position);
 
 	tx_hex_header(header);
 }
 
 void
-tx_znak()
+tx_znak(void)
 
 {
 	fprintf(stderr,"tx_znak\n");
@@ -531,10 +542,10 @@ tx_znak()
 }
 
 void
-tx_zskip()
+tx_zskip(void)
 
 {
-	tx_pos_header(ZSKIP,0L);
+	tx_pos_header(ZSKIP,UINT32_C(0));
 }
 
 /*
@@ -545,16 +556,16 @@ void
 alrm(int a)
 
 {
+	(void)a;
 	signal(SIGALRM,SIG_IGN);
 }
 
 int
-rx_poll()
+rx_poll(void)
 
 {
 	struct timeval t;
 	fd_set f;
-	unsigned char c;
 
 	t.tv_sec = 0;
 	t.tv_usec = 0;
@@ -569,9 +580,9 @@ rx_poll()
 	return 0;
 }
 
-unsigned char inputbuffer[1024];
-int n_in_inputbuffer = 0;
-int inputbuffer_index;
+uint8_t inputbuffer[1024];
+size_t n_in_inputbuffer = 0;
+size_t inputbuffer_index;
 
 /*
  * rx_raw ; receive a single byte from the line.
@@ -582,14 +593,13 @@ int inputbuffer_index;
  * for an exit. (but that was wat session abort was all about.)
  */
 
-inline
 int
 rx_raw(int to)
 
 {
-	int n;
-	unsigned char c;
+	uint8_t c;
 	static int n_cans = 0;
+	ssize_t nread;
 
 	if (n_in_inputbuffer == 0) {
 		/*
@@ -613,13 +623,9 @@ rx_raw(int to)
 			to = 2;
 		}
 
-		alarm(to);
+		alarm((unsigned int)to);
 
-		n_in_inputbuffer = read(0,inputbuffer,1024);
-
-		if (n_in_inputbuffer <= 0) {
-			n_in_inputbuffer = 0;
-		}
+		nread = read(0,inputbuffer,sizeof(inputbuffer));
 
 		/*
 	 	 * cancel the alarm in case it did not go off yet
@@ -627,15 +633,16 @@ rx_raw(int to)
 
 		signal(SIGALRM,SIG_IGN);
 
-		if (n_in_inputbuffer < 0 && (errno != 0 && errno != EINTR)) {
+		if (nread < 0 && errno != EINTR) {
 			fprintf(stderr,"zmdm : fatal error reading device\n");
 			exit(1);
 		}
 
-		if (n_in_inputbuffer == 0) {
+		if (nread <= 0) {
 			return TIMEOUT;
 		}
 
+		n_in_inputbuffer = (size_t)nread;
 		inputbuffer_index = 0;
 	}
 
@@ -669,7 +676,7 @@ rx_raw(int to)
  * is relatively short.
  */
 
-inline
+static
 int
 rx(int to)
 
@@ -682,7 +689,7 @@ rx(int to)
 	 * will be received.
 	 */
 
-	while (TRUE) {
+	while (true) {
 
 		/*
 	 	 * fake do loop so we may continue
@@ -717,7 +724,7 @@ rx(int to)
 					 */
 					return c;
 			}
-		} while (FALSE);
+		} while (false);
 	
 		/*
 	 	 * ZDLE encoded sequence or session abort.
@@ -771,13 +778,53 @@ rx(int to)
 					}
 					break;
 			}
-		} while (FALSE);
+		} while (false);
 	}
 
 	/*
 	 * not reached.
 	 */
 
+	return 0;
+}
+
+static int
+rx_crc16(int timeout,uint16_t * value)
+
+{
+	int high;
+	int low;
+
+	high = rx(timeout);
+	if (high == TIMEOUT) {
+		return TIMEOUT;
+	}
+	low = rx(timeout);
+	if (low == TIMEOUT) {
+		return TIMEOUT;
+	}
+
+	*value = (uint16_t)(((uint16_t)(uint8_t)high << 8) | (uint8_t)low);
+	return 0;
+}
+
+static int
+rx_crc32(int timeout,uint32_t * value)
+
+{
+	int c;
+	size_t i;
+	uint32_t result = 0;
+
+	for (i=0;i<sizeof(result);i++) {
+		c = rx(timeout);
+		if (c == TIMEOUT) {
+			return TIMEOUT;
+		}
+		result |= (uint32_t)(uint8_t)c << (i * 8);
+	}
+
+	*value = result;
 	return 0;
 }
 
@@ -796,19 +843,19 @@ rx(int to)
  */
 
 int
-rx_32_data(unsigned char * p,int * l)
+rx_32_data(uint8_t * p,size_t * l)
 
 {
 	int c;
-	unsigned long rxd_crc;
-	unsigned long crc;
+	uint32_t rxd_crc;
+	uint32_t crc;
 	int sub_frame_type;
 
 #ifdef DEBUG
 	fprintf(stderr,"rx_32_data\n");
 #endif
 
-	crc = 0xffffffffl;
+	crc = UINT32_MAX;
 
 	do {
 		c = rx(1000);
@@ -818,7 +865,7 @@ rx_32_data(unsigned char * p,int * l)
 		}
 		if (c < 0x100) {
 			crc = UPDCRC32(c,crc);
-			*p++ = c;
+			*p++ = (uint8_t)c;
 			(*l)++;
 			continue;
 		}
@@ -830,28 +877,30 @@ rx_32_data(unsigned char * p,int * l)
 
 	crc = ~crc;
 
-	rxd_crc  = rx(1000);
-	rxd_crc |= rx(1000) << 8;
-	rxd_crc |= rx(1000) << 16;
-	rxd_crc |= rx(1000) << 24;
-
-	if (rxd_crc != crc) {
-		return FALSE;
+	if (rx_crc32(1000,&rxd_crc) == TIMEOUT) {
+		return TIMEOUT;
 	}
 
-	ack_file_pos += *l;
+	if (rxd_crc != crc) {
+		return 0;
+	}
+
+	if (*l > (size_t)(UINT32_MAX - ack_file_pos)) {
+		return 0;
+	}
+	ack_file_pos += (uint32_t)*l;
 
 	return sub_frame_type;
 }
 
 int
-rx_16_data(register unsigned char * p,int * l)
+rx_16_data(uint8_t * p,size_t * l)
 
 {
-	register int c;
+	int c;
 	int sub_frame_type;
- 	register unsigned short crc;
-	unsigned short rxd_crc;
+	uint16_t crc;
+	uint16_t rxd_crc;
 
 #ifdef DEBUG
 	fprintf(stderr,"rx_16_data\n");
@@ -867,7 +916,7 @@ rx_16_data(register unsigned char * p,int * l)
 		}
 		if (c < 0x100) {
 			crc = UPDCRC16(c,crc);
-			*p++ = c;
+			*p++ = (uint8_t)c;
 			(*l)++;
 		}
 	} while (c < 0x100);
@@ -879,25 +928,28 @@ rx_16_data(register unsigned char * p,int * l)
 	crc = UPDCRC16(0,crc);
 	crc = UPDCRC16(0,crc);
 
-	rxd_crc  = rx(1000) << 8;
-	rxd_crc |= rx(1000);
-
-	if (rxd_crc != crc) {
-		return FALSE;
+	if (rx_crc16(1000,&rxd_crc) == TIMEOUT) {
+		return TIMEOUT;
 	}
 
-	ack_file_pos += *l;
+	if (rxd_crc != crc) {
+		return 0;
+	}
+
+	if (*l > (size_t)(UINT32_MAX - ack_file_pos)) {
+		return 0;
+	}
+	ack_file_pos += (uint32_t)*l;
 
 	return sub_frame_type;
 }
 
 int
-rx_data(unsigned char * p, int * l)
+rx_data(uint8_t * p,size_t * l)
 
 {
-	unsigned char zack_header[] = { ZACK, 0, 0, 0, 0 };
 	int sub_frame_type;
-	long pos;
+	uint32_t pos;
 
 	/*
 	 * fill in the file pointer in case acknowledgement is requested.	
@@ -952,10 +1004,10 @@ rx_data(unsigned char * p, int * l)
 			break;
 	}
 
-	return FALSE;
+	return 0;
 }
 
-inline
+static
 int
 rx_nibble(int to) 
 
@@ -1026,9 +1078,9 @@ rx_bin16_header(int to)
 
 {
 	int c;
-	int n;
-	unsigned short int crc;
-	unsigned short int rxd_crc;
+	size_t n;
+	uint16_t crc;
+	uint16_t rxd_crc;
 
 #ifdef DEBUG
 	fprintf(stderr,"rx binary header 16 bits crc\n");
@@ -1045,18 +1097,20 @@ rx_bin16_header(int to)
 			return;
 		}
 		crc = UPDCRC16(c,crc);
-		rxd_header[n] = c;
+		rxd_header[n] = (uint8_t)c;
 	}
 
 	crc = UPDCRC16(0,crc);
 	crc = UPDCRC16(0,crc);
 
-	rxd_crc  = rx(1000) << 8;
-	rxd_crc |= rx(1000);
+	if (rx_crc16(1000,&rxd_crc) == TIMEOUT) {
+		return;
+	}
 
 	if (rxd_crc != crc) {
 #ifdef DEBUG
-		fprintf(stderr,"bad crc %4.4x %4.4x\n",rxd_crc,crc);
+		fprintf(stderr,"bad crc %4.4x %4.4x\n",
+			(unsigned int)rxd_crc,(unsigned int)crc);
 #endif
 		return;
 	}
@@ -1069,9 +1123,9 @@ rx_hex_header(int to)
 
 {
 	int c;
-	int i;
-	unsigned short int crc = 0;
-	unsigned short int rxd_crc;
+	size_t i;
+	uint16_t crc = 0;
+	uint16_t rxd_crc;
 
 #ifdef DEBUG
 	fprintf(stderr,"rx_hex_header : ");
@@ -1083,7 +1137,7 @@ rx_hex_header(int to)
 		}
 		crc = UPDCRC16(c,crc);
 
-		rxd_header[i] = c;
+		rxd_header[i] = (uint8_t)c;
 	}
 
 	crc = UPDCRC16(0,crc);
@@ -1100,7 +1154,7 @@ rx_hex_header(int to)
 		return;
 	}
 
-	rxd_crc = c << 8;
+	rxd_crc = (uint16_t)((uint16_t)(uint8_t)c << 8);
 
 	c = rx_hex(to);
 
@@ -1108,7 +1162,7 @@ rx_hex_header(int to)
 		return;
 	}
 
-	rxd_crc |= c;
+	rxd_crc |= (uint8_t)c;
 
 	if (rxd_crc == crc) {
 		rxd_header_len = 5;
@@ -1136,15 +1190,17 @@ rx_bin32_header(int to)
 
 {
 	int c;
-	int n;
-	unsigned long crc;
-	unsigned long rxd_crc;
+	size_t n;
+	uint32_t crc;
+	uint32_t rxd_crc;
+
+	(void)to;
 
 #ifdef DEBUG
 	fprintf(stderr,"rx binary header 32 bits crc\n");
 #endif
 
-	crc = 0xffffffffL;
+	crc = UINT32_MAX;
 
 	for (n=0;n<5;n++) {
 		c = rx(1000);
@@ -1152,15 +1208,14 @@ rx_bin32_header(int to)
 			return;
 		}
 		crc = UPDCRC32(c,crc);
-		rxd_header[n] = c;
+		rxd_header[n] = (uint8_t)c;
 	}
 
 	crc = ~crc;
 
-	rxd_crc  = rx(1000);
-	rxd_crc |= rx(1000) << 8;
-	rxd_crc |= rx(1000) << 16;
-	rxd_crc |= rx(1000) << 24;
+	if (rx_crc32(1000,&rxd_crc) == TIMEOUT) {
+		return;
+	}
 
 	if (rxd_crc != crc) {
 		return;
@@ -1179,7 +1234,7 @@ rx_bin32_header(int to)
  */
 
 int
-rx_header_raw(int to,int errors)
+rx_header_raw(int to,bool errors)
 
 {
 	int c;
@@ -1236,15 +1291,15 @@ rx_header_raw(int to,int errors)
 		switch (c) {
 			case ZBIN:
 				rx_bin16_header(to);
-				receive_32_bit_data = FALSE;
+				receive_32_bit_data = false;
 				break;
 			case ZHEX:
 				rx_hex_header(to);
-				receive_32_bit_data = FALSE;
+				receive_32_bit_data = false;
 				break;
 			case ZBIN32:
 				rx_bin32_header(to);
-				receive_32_bit_data = TRUE;
+				receive_32_bit_data = true;
 				break;
 			default:
 				/*
@@ -1272,12 +1327,11 @@ rx_header_raw(int to,int errors)
 	 */
 
 	if (rxd_header[0] == ZDATA) {
-		ack_file_pos = rxd_header[ZP0] | (rxd_header[ZP1] << 8) |
-			(rxd_header[ZP2] << 16) | (rxd_header[ZP3] << 24);
+		ack_file_pos = zmodem_header_position(rxd_header);
 	}
 
 	if (rxd_header[0] == ZFILE) {
-		ack_file_pos = 0l;
+		ack_file_pos = UINT32_C(0);
 	}
 
 #ifdef DEBUG
@@ -1291,7 +1345,7 @@ int
 rx_header(int timeout)
 
 {
-	return rx_header_raw(timeout,FALSE);
+	return rx_header_raw(timeout,false);
 }
 
 int
@@ -1299,8 +1353,8 @@ rx_header_and_check(int timeout)
 
 {
 	int type;
-	while (TRUE) {
-		type = rx_header_raw(timeout,TRUE);		
+	while (true) {
+		type = rx_header_raw(timeout,true);
 
 		if (type != INVHDR) {
 			break;
@@ -1311,4 +1365,3 @@ rx_header_and_check(int timeout)
 
 	return type;
 }
-

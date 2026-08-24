@@ -1,6 +1,4 @@
-CC=gcc
-#CFLAGS=-O -DUNITE
-CFLAGS += -DSUNOS4
+CFLAGS += -std=c99 -D_POSIX_C_SOURCE=200112L -D_FILE_OFFSET_BITS=64
 
 all:	zmtx zmrx
 
@@ -19,4 +17,3 @@ crctab.o:	crctab.c
 clean:
 	rm *.o
 	rm zmtx zmrx
-

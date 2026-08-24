@@ -35,7 +35,9 @@
 #include <ctype.h>
 #include <stdio.h>
 #include <fcntl.h>
+#include <sys/types.h>
 #include <sys/stat.h>
+#include <inttypes.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
@@ -48,13 +50,13 @@
 #define MAX_SUBPACKETSIZE 1024
 
 char * line = NULL;												/* device to use for io */
-int opt_v = FALSE;												/* show progress output */
-int opt_d = FALSE;												/* show debug output */
-int subpacket_size = MAX_SUBPACKETSIZE;							/* data subpacket size. may be modified during a session */
+bool opt_v = false;											/* show progress output */
+bool opt_d = false;											/* show debug output */
+size_t subpacket_size = MAX_SUBPACKETSIZE;						/* data subpacket size. may be modified during a session */
 int n_files_remaining;
-unsigned char tx_data_subpacket[1024];
+uint8_t tx_data_subpacket[1024];
 
-long current_file_size;
+off_t current_file_size;
 time_t transfer_start;
 
 /* 
@@ -66,27 +68,31 @@ void
 show_progress(char * name,FILE * fp)
 
 {
-	time_t duration;
-	int cps;
+	double duration;
+	intmax_t cps;
 	int percentage;
+	off_t position;
 
-	if (current_file_size > 0) {
-		percentage = (ftell(fp) * 100) / current_file_size;
+	position = ftello(fp);
+
+	if (current_file_size > 0 && position >= 0) {
+		percentage = (int)(100.0 * (double)position /
+			(double)current_file_size);
 	}
 	else {
 		percentage = 100;
 	}
 
-	duration = time(NULL) - transfer_start;
+	duration = difftime(time(NULL),transfer_start);
 
-	if (duration == 0l) {
-		duration = 1l;
+	if (duration <= 0.0) {
+		duration = 1.0;
 	}
 
-	cps = ftell(fp) / duration;
+	cps = position < 0 ? 0 : (intmax_t)((double)position / duration);
 
-	fprintf(stderr,"sending file \"%s\" %8ld bytes (%3d %%/%5d cps)\r",
-		name,ftell(fp),percentage,cps);
+	fprintf(stderr,"sending file \"%s\" %8" PRIdMAX " bytes (%3d %%/%5" PRIdMAX " cps)\r",
+		name,(intmax_t)position,percentage,cps);
 }
 
 /*
@@ -100,18 +106,20 @@ int
 send_from(char * name,FILE * fp)
 
 {
-	int n;
+	size_t n;
 	int type = ZCRCG;
-	char zdata_frame[] = { ZDATA, 0, 0, 0, 0 };
+	off_t position;
+	uint8_t zdata_frame[] = { ZDATA, 0, 0, 0, 0 };
 
 	/*
  	 * put the file position in the ZDATA frame
 	 */
 
-	zdata_frame[ZP0] =  ftell(fp)        & 0xff;
-	zdata_frame[ZP1] = (ftell(fp) >> 8)  & 0xff;
-	zdata_frame[ZP2] = (ftell(fp) >> 16) & 0xff;
-	zdata_frame[ZP3] = (ftell(fp) >> 24) & 0xff;
+	position = ftello(fp);
+	if (position < 0 || (uintmax_t)position > UINT32_MAX) {
+		return ZFERR;
+	}
+	zmodem_set_header_position(zdata_frame,(uint32_t)position);
 
 	tx_header(zdata_frame);
 	/*
@@ -138,11 +146,11 @@ send_from(char * name,FILE * fp)
 		/*
 		 * at end of file wait for an ACK
 		 */
-		if (ftell(fp) == current_file_size) {
+		if (ftello(fp) == current_file_size) {
 			type = ZCRCW;
 		}
 
-		tx_data(type,tx_data_subpacket,n);
+		tx_data((uint8_t)type,tx_data_subpacket,n);
 
 		if (type == ZCRCW) {
 			int type;
@@ -153,7 +161,7 @@ send_from(char * name,FILE * fp)
 				}
 			} while (type != ZACK);
 
-			if (ftell(fp) == current_file_size) {
+			if (ftello(fp) == current_file_size) {
 				if (opt_d) {
 					fprintf(stderr,"end of file\n");
 				}
@@ -192,18 +200,19 @@ send_from(char * name,FILE * fp)
  * (using ZABORT frame)
  */
 
-int
+bool
 send_file(char * name)
 
 {
-	long pos;
-	long size;
+	uint32_t pos;
+	uint32_t size;
+	off_t seek_pos;
 	struct stat s;
 	FILE * fp;
-	unsigned char * p;
-	char zfile_frame[] = { ZFILE, 0, 0, 0, 0 };
-	char zeof_frame[] = { ZEOF, 0, 0, 0, 0 };
-	int wait_for_header;
+	uintmax_t wire_mdate;
+	char * p;
+	uint8_t zfile_frame[] = { ZFILE, 0, 0, 0, 0 };
+	uint8_t zeof_frame[] = { ZEOF, 0, 0, 0, 0 };
 	int type;
 	char * n;
 
@@ -221,12 +230,31 @@ send_file(char * name)
 		if (opt_v) {
 			fprintf(stderr,"zmtx: can't open file %s\n",name);
 		}
-		return FALSE;
+		return false;
 	}
 
-	fstat(fileno(fp),&s);
-	size = s.st_size;
-	current_file_size = size;
+	if (fstat(fileno(fp),&s) != 0) {
+		if (opt_v) {
+			fprintf(stderr,"zmtx: can't stat file %s\n",name);
+		}
+		fclose(fp);
+		return false;
+	}
+	if (s.st_size < 0 || (uintmax_t)s.st_size > UINT32_MAX) {
+		if (opt_v) {
+			fprintf(stderr,"zmtx: file is too large for ZMODEM: %s\n",name);
+		}
+		fclose(fp);
+		return false;
+	}
+	size = (uint32_t)s.st_size;
+	current_file_size = s.st_size;
+	if (difftime(s.st_mtime,(time_t)0) < 0) {
+		wire_mdate = 0;
+	}
+	else {
+		wire_mdate = (uintmax_t)s.st_mtime;
+	}
 
 	/*
 	 * the file exists. now build the ZFILE frame
@@ -286,7 +314,7 @@ send_file(char * name)
 	 * first enter the name and a 0
 	 */
 
-	p = tx_data_subpacket;
+	p = (char *)tx_data_subpacket;
 
 	/*
 	 * strip the path name from the filename
@@ -308,7 +336,7 @@ send_file(char * name)
 	 * next the file size
 	 */
 
-	sprintf(p,"%ld ",size);
+	sprintf(p,"%" PRIu32 " ",size);
 
 	p += strlen(p);
 
@@ -316,7 +344,7 @@ send_file(char * name)
  	 * modification date
 	 */
 
-	sprintf(p,"%llo ",(long long)s.st_mtime);
+	sprintf(p,"%" PRIoMAX " ",wire_mdate);
 
 	p += strlen(p);
 
@@ -358,7 +386,8 @@ send_file(char * name)
 	 	 */
 
 		tx_header(zfile_frame);
-		tx_data(ZCRCW,tx_data_subpacket,p - tx_data_subpacket);
+		tx_data(ZCRCW,tx_data_subpacket,
+			(size_t)(p - (char *)tx_data_subpacket));
 	
 		/*
 		 * wait for anything but an ZACK packet
@@ -377,7 +406,7 @@ send_file(char * name)
 			if (opt_v) {
 				fprintf(stderr,"zmtx: skipped file \"%s\"                       \n",name);
 			}
-			return FALSE;
+			return false;
 		}
 
 	} while (type != ZRPOS);
@@ -390,13 +419,18 @@ send_file(char * name)
 		 */
 
 		if (type == ZRPOS) {
-			pos = rxd_header[ZP0] | (rxd_header[ZP1] << 8) | (rxd_header[ZP2] << 16) | (rxd_header[ZP3] << 24);
+			pos = zmodem_header_position(rxd_header);
 		}
 
 		/*
  		 * seek to the right place in the file
 		 */
-		fseek(fp,pos,0);
+		seek_pos = (off_t)pos;
+		if (seek_pos < 0 || (uintmax_t)seek_pos != pos ||
+		    fseeko(fp,seek_pos,SEEK_SET) != 0) {
+			fclose(fp);
+			return true;
+		}
 
 		/*
 		 * and start sending
@@ -406,7 +440,7 @@ send_file(char * name)
 
 		if (type == ZFERR || type == ZABORT) {
  			fclose(fp);
-			return TRUE;
+			return true;
 		}
 
 	} while (type == ZRPOS || type == ZNAK);
@@ -416,10 +450,7 @@ send_file(char * name)
 	 * and wait for zrinit. if it doesnt come then try again
 	 */
 
-	zeof_frame[ZP0] =  s.st_size        & 0xff;
-	zeof_frame[ZP1] = (s.st_size >> 8)  & 0xff;
-	zeof_frame[ZP2] = (s.st_size >> 16) & 0xff;
-	zeof_frame[ZP3] = (s.st_size >> 24) & 0xff;
+	zmodem_set_header_position(zeof_frame,size);
 
 	do {
 		tx_hex_header(zeof_frame);
@@ -436,7 +467,7 @@ send_file(char * name)
 
 	fclose(fp);
 
-	return FALSE;
+	return false;
 }
 
 void
@@ -493,7 +524,7 @@ main(int argc,char ** argv)
 	}
 
 	if (opt_d) {
-		opt_v = TRUE;
+		opt_v = true;
 	}
 
 	if ((management_newer + management_clobber + management_protect) > 1 || argc == 0) {
@@ -537,7 +568,7 @@ main(int argc,char ** argv)
 
 	i = 0;
 	do {
-		unsigned char zrqinit_header[] = { ZRQINIT, 0, 0, 0, 0 };
+		uint8_t zrqinit_header[] = { ZRQINIT, 0, 0, 0, 0 };
 		i++;
 		if (i > 10) {
 			fprintf(stderr,"zmtx: can't establish contact with receiver\n");
@@ -609,7 +640,7 @@ main(int argc,char ** argv)
 
 	{
 		int type;
-		unsigned char zfin_header[] = { ZFIN, 0, 0, 0, 0 };
+		uint8_t zfin_header[] = { ZFIN, 0, 0, 0, 0 };
 
 		tx_hex_header(zfin_header);
 		do {

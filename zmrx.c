@@ -33,9 +33,12 @@
  */
 
 #include <ctype.h>
+#include <errno.h>
 #include <stdio.h>
 #include <fcntl.h>
+#include <sys/types.h>
 #include <sys/stat.h>
+#include <inttypes.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
@@ -47,18 +50,19 @@
 #include "opts.h"
 
 FILE * fp = NULL;												/* fp of file being received or NULL */
-long mdate;														/* file date of file being received */
+time_t mdate;													/* file date of file being received */
+bool mdate_known;
 char filename[0x80];											/* filename of file being received */
 char * name;													/* pointer to the part of the filename used in the actual open */
 
 char * line = NULL;												/* device to use for io */
-int opt_v = FALSE;												/* show progress output */
-int opt_d = FALSE;												/* show debug output */
-int opt_q = FALSE;
-int junk_pathnames = FALSE;										/* junk incoming path names or keep them */
-unsigned char rx_data_subpacket[8192];							/* zzap = 8192 */
+bool opt_v = false;												/* show progress output */
+bool opt_d = false;												/* show debug output */
+bool opt_q = false;
+bool junk_pathnames = false;										/* junk incoming path names or keep them */
+uint8_t rx_data_subpacket[8192];								/* zzap = 8192 */
 
-long current_file_size;
+uint32_t current_file_size;
 time_t transfer_start;
 
 /* 
@@ -72,26 +76,45 @@ show_progress(char * name,FILE * fp)
 
 {
 	int percentage;
-	time_t duration;
-	int cps;
+	double duration;
+	intmax_t cps;
+	off_t position;
 
-	if (current_file_size > 0) {
-		percentage = (ftell(fp) * 100) / current_file_size;
+	position = ftello(fp);
+
+	if (current_file_size > 0 && position >= 0) {
+		percentage = (int)(100.0 * (double)position /
+			(double)current_file_size);
 	}
 	else {
 		percentage = 100;
 	}
 
-	duration = time(NULL) - transfer_start;
+	duration = difftime(time(NULL),transfer_start);
 
-	if (duration == 0l) {
-		duration = 1;
+	if (duration <= 0.0) {
+		duration = 1.0;
 	}
 
-	cps = ftell(fp) / duration;
+	cps = position < 0 ? 0 : (intmax_t)((double)position / duration);
 
-	fprintf(stderr,"receiving file \"%s\" %8ld bytes (%3d %%/%5d cps)\r",
-		name,ftell(fp),percentage,cps);
+	fprintf(stderr,"receiving file \"%s\" %8" PRIdMAX " bytes (%3d %%/%5" PRIdMAX " cps)\r",
+		name,(intmax_t)position,percentage,cps);
+}
+
+static bool
+file_position(FILE * file,uint32_t * position)
+
+{
+	off_t offset;
+
+	offset = ftello(file);
+	if (offset < 0 || (uintmax_t)offset > UINT32_MAX) {
+		return false;
+	}
+
+	*position = (uint32_t)offset;
+	return true;
 }
 
 /*
@@ -107,16 +130,20 @@ int
 receive_file_data(char * name,FILE * fp)
 
 {
-	static int first = TRUE;
-	long pos;
-	int n;
+	uint32_t pos;
+	uint32_t wanted_pos;
+	size_t n;
 	int type;
 
 	/*
  	 * create a ZRPOS frame and send it to the other side
 	 */
 
-	tx_pos_header(ZRPOS,ftell(fp));
+	if (!file_position(fp,&wanted_pos)) {
+		tx_pos_header(ZFERR,UINT32_C(0));
+		return ZFERR;
+	}
+	tx_pos_header(ZRPOS,wanted_pos);
 
 /*	fprintf(stderr,"re-transmit from %d\n",ftell(fp));
 */
@@ -133,9 +160,8 @@ receive_file_data(char * name,FILE * fp)
 			}
 		} while (type != ZDATA);
 
-		pos = rxd_header[ZP0] | (rxd_header[ZP1] << 8) |
-			(rxd_header[ZP2] << 16) | (rxd_header[ZP3] << 24);
-	} while (pos != ftell(fp));
+		pos = zmodem_header_position(rxd_header);
+	} while (pos != wanted_pos);
 		
 	do {
 		type = rx_data(rx_data_subpacket,&n);
@@ -156,12 +182,46 @@ receive_file_data(char * name,FILE * fp)
 }
 
 void
-tx_zrinit()
+tx_zrinit(void)
 
 {
-	unsigned char zrinit_header[] = { ZRINIT, 0, 0, 0, 4 | ZF0_CANFDX | ZF0_CANOVIO | ZF0_CANFC32 };
+	uint8_t zrinit_header[] = { ZRINIT, 0, 0, 0, 4 | ZF0_CANFDX | ZF0_CANOVIO | ZF0_CANFC32 };
 
 	tx_hex_header(zrinit_header);
+}
+
+static bool
+parse_mdate(const char *text,time_t *value)
+
+{
+	char * end;
+	time_t converted;
+	uintmax_t wire_value;
+
+	while (*text == ' ') {
+		text++;
+	}
+	if (*text == '-') {
+		return false;
+	}
+
+	errno = 0;
+	wire_value = strtoumax(text,&end,8);
+	if (text == end || errno == ERANGE || wire_value == 0) {
+		return false;
+	}
+	if (*end != '\0' && *end != ' ') {
+		return false;
+	}
+
+	converted = (time_t)wire_value;
+	if (difftime(converted,(time_t)0) < 0 ||
+	    (uintmax_t)converted != wire_value) {
+		return false;
+	}
+
+	*value = converted;
+	return true;
 }
 
 
@@ -172,19 +232,28 @@ tx_zrinit()
  */
 
 void
-receive_file()
+receive_file(void)
 
 {
-	long size;
+	uint32_t size = 0;
+	uint32_t position;
+	uintmax_t parsed_size;
 	struct stat s;
-	int type;
-	int l;
-	int clobber;
-	int protect;
-	int newer;
-	int exists;
+	int type = 0;
+	size_t l;
+	bool clobber = false;
+	bool protect = false;
+	bool newer = false;
+	bool exists;
+	bool size_invalid = false;
 	struct utimbuf tv;
 	char * mode = "wb";
+	char * file_info = (char *)rx_data_subpacket;
+	char * metadata;
+	char * size_field;
+	char * date_field;
+
+	mdate_known = false;
 
 	/*
 	 * fetch the management info bits from the ZRFILE header
@@ -195,16 +264,16 @@ receive_file()
 	 */
 
 	if (management_protect || (rxd_header[ZF1] & ZF1_ZMPROT)) {
-		protect = TRUE;
+		protect = true;
 	}
 	else {
 		if (management_clobber || (rxd_header[ZF1] & ZF1_ZMCLOB)) {
-			clobber = TRUE;
+			clobber = true;
 		}
 	}
 
 	if (management_newer || (rxd_header[ZF1] & ZF1_ZMNEW)) {
-		newer = TRUE;
+		newer = true;
 	}
 
 	/*
@@ -227,7 +296,7 @@ receive_file()
 	 * extract the relevant info from the header.
 	 */
 
-	strcpy(filename,rx_data_subpacket);
+	strcpy(filename,file_info);
 
 	if (junk_pathnames) {
 		name = strrchr(filename,'/');
@@ -246,8 +315,31 @@ receive_file()
 		fprintf(stderr,"receiving file \"%s\"\r",name);
 	}
 
-	sscanf(rx_data_subpacket + strlen(rx_data_subpacket) + 1,
-		"%ld %lo",&size,&mdate);
+	metadata = file_info + strlen(file_info) + 1;
+	size_field = metadata;
+	while (*size_field == ' ') {
+		size_field++;
+	}
+	date_field = size_field;
+	if (*size_field != '\0') {
+		errno = 0;
+		parsed_size = strtoumax(size_field,&date_field,10);
+		if (*size_field == '-' || size_field == date_field ||
+		    errno == ERANGE || parsed_size > UINT32_MAX) {
+			size_invalid = true;
+		}
+		else {
+			size = (uint32_t)parsed_size;
+		}
+	}
+
+	if (*date_field == ' ') {
+		mdate_known = parse_mdate(date_field + 1,&mdate);
+	}
+	if (size_invalid) {
+		tx_pos_header(ZSKIP,UINT32_C(0));
+		return;
+	}
 
 	current_file_size = size;
 
@@ -258,14 +350,12 @@ receive_file()
 	fp = fopen(name,"rb");
 
 	if (fp != NULL) {
-		exists = TRUE;
-
-		fstat(fileno(fp),&s);
+		exists = fstat(fileno(fp),&s) == 0;
 
 		fclose(fp);
 	}
 	else {
-		exists = FALSE;
+		exists = false;
 	}
 
 	/*
@@ -273,7 +363,8 @@ receive_file()
 	 * be checked..
 	 */
 	if (exists) {
-		if (mdate == s.st_mtime) {
+		if (mdate_known && mdate == s.st_mtime && s.st_size >= 0 &&
+		    (uintmax_t)s.st_size <= UINT32_MAX) {
 			/*
 			 * this is crash recovery
 			 */
@@ -284,7 +375,7 @@ receive_file()
 		 	 * if the file needs to be protected then exit here.
 			 */
 			if (protect) {		
-				tx_pos_header(ZSKIP,0L);
+				tx_pos_header(ZSKIP,UINT32_C(0));
 				return;
 			}
 			/*
@@ -295,8 +386,8 @@ receive_file()
 				 * if the remote file has to be newer
 				 */
 				if (newer) {
-					if (mdate < s.st_mtime) {
-						tx_pos_header(ZSKIP,0L);
+					if (!mdate_known || mdate < s.st_mtime) {
+						tx_pos_header(ZSKIP,UINT32_C(0));
 						/*
 					 	 * and it isnt then exit here.
 					 	 */
@@ -316,7 +407,7 @@ receive_file()
 	fp = fopen(name,mode);
 
 	if (fp == NULL) {
-		tx_pos_header(ZSKIP,0L);
+		tx_pos_header(ZSKIP,UINT32_C(0));
 		if (opt_v) {
 			fprintf(stderr,"zmrx: can't open file %s\n",name);
 		}
@@ -325,11 +416,24 @@ receive_file()
 
 	transfer_start = time(NULL);
 
-	while (ftell(fp) != size) {
-		type = receive_file_data(filename,fp);
-		if (type == ZEOF) {
+	for (;;) {
+		if (!file_position(fp,&position)) {
+			tx_pos_header(ZFERR,UINT32_C(0));
+			type = ZFERR;
 			break;
 		}
+		if (position == size) {
+			break;
+		}
+		type = receive_file_data(filename,fp);
+		if (type == ZEOF || type == ZFERR) {
+			break;
+		}
+	}
+	if (type == ZFERR) {
+		fclose(fp);
+		fp = NULL;
+		return;
 	}
 
 	/*
@@ -352,10 +456,12 @@ receive_file()
 	 * set the time
 	 */
 
-	tv.actime = mdate;
-	tv.modtime = mdate;
+	if (mdate_known) {
+		tv.actime = mdate;
+		tv.modtime = mdate;
 
-	utime(name, &tv);
+		utime(name, &tv);
+	}
 
 	/*
 	 * and close the input file
@@ -379,10 +485,12 @@ cleanup(void)
 		 * set the time (so crash recovery may work)
 		 */
 
-		tv.actime = mdate;
-		tv.modtime = mdate;
+		if (mdate_known) {
+			tv.actime = mdate;
+			tv.modtime = mdate;
 
-		utime(name, &tv);
+			utime(name, &tv);
+		}
 	}
 
 	fd_exit();
@@ -441,12 +549,12 @@ main(int argc,char ** argv)
 	}
 
 	if (opt_d) {
-		opt_v = TRUE;
+		opt_v = true;
 	}
 
 	if (opt_q) {
-		opt_v = FALSE;
-		opt_d = FALSE;
+		opt_v = false;
+		opt_d = false;
 	}
 
 #if 0
@@ -525,7 +633,7 @@ main(int argc,char ** argv)
 				receive_file();
 				break;
 			default:
-				tx_pos_header(ZCOMPL,0l);
+				tx_pos_header(ZCOMPL,UINT32_C(0));
 				break;
 		}
 
@@ -545,8 +653,7 @@ main(int argc,char ** argv)
 	}
 
 	{
-		int type;
-		unsigned char zfin_header[] = { ZFIN, 0, 0, 0, 0 };
+		uint8_t zfin_header[] = { ZFIN, 0, 0, 0, 0 };
 
 		tx_hex_header(zfin_header);
 	}
