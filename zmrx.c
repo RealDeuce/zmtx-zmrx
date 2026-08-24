@@ -549,6 +549,7 @@ receive_file(void)
 		exists = fstat(fileno(fp),&s) == 0;
 
 		(void)fclose(fp);
+		fp = NULL;
 	}
 	else {
 		exists = false;
