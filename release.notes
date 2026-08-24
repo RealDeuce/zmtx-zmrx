@@ -25,6 +25,32 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 Special thanks to Jacques Mattheij, formerly of Mattheij Computer Service,
 and original author of zmtx/zmrx.
 
+2.00 release notes (24/08/26)
+
+This release incorporates applicable bug fixes from the Synchronet ZMODEM
+implementation which originally descended from this code. Protocol recovery,
+acknowledgement handling, resume positions, end-of-file processing and error
+reporting are substantially more robust. A comprehensive protocol regression
+suite now covers successful transfers as well as malformed and hostile input.
+
+Three remotely triggerable receive-side buffer overflows present in releases
+1.02 and 1.03 have been fixed. Both CRC16 and CRC32 data subpackets are bounded
+and fully consumed before oversized packets are rejected. Incoming file names
+and metadata are validated before use, and exact filename boundaries are
+tested. Related integer conversion and character classification edge cases
+have also been hardened.
+
+ZedZap 4 KiB and 8 KiB subpackets are supported with the -4 and -8 options.
+The new -s option provides non-streaming operation, and -w limits the amount
+of unacknowledged data with a sliding transmit window. The sender also adapts
+to receiver buffering and overlap capabilities and adjusts its subpacket size
+in response to transfer errors.
+
+Performance has been improved with buffered transmit escaping, larger input
+buffers and batched slicing-by-4 CRC32 calculation on both transmit and
+receive paths. These changes reduce per-byte overhead while retaining CRC
+validation and protocol synchronization for malformed or oversized packets.
+
 1.03 release notes (24/08/26)
 
 Thirty-two years is probably long enough between releases. The sources are
