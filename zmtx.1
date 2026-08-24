@@ -1,4 +1,4 @@
-.TH ZMTX 1 "August 2026"
+.TH ZMTX 1 "August 24, 2026"
 .SH NAME
 zmtx \- transmit file using ZMODEM protocol
 .SH SYNOPSIS
@@ -7,6 +7,8 @@ zmtx \- transmit file using ZMODEM protocol
 .B \-48snopdv
 ] [
 .B \-l\fIline\fP
+] [
+.B \-w\fIbytes\fP
 ]
 .SH DESCRIPTION
 .I zmtx
@@ -31,6 +33,19 @@ use it only with a receiver known to accept ZedZap subpackets.
 Disable streaming and wait for a committed-position acknowledgement after
 every data subpacket.  This mode is also selected automatically when the
 receiver does not advertise overlapped I/O capability.
+.TP
+.B \-w\fIbytes\fP
+Limit the amount of transmitted but unacknowledged file data.  The value is
+in bytes and may have a case-insensitive binary K or M suffix.  The window
+must hold at least four maximum-size data subpackets, so the minimum is 4 KiB
+normally, 16 KiB with
+.BR \-4 ,
+and 32 KiB with
+.BR \-8 .
+The sender requests acknowledgements at approximately quarter-window
+intervals.  If the receiver is not full duplex, the sender safely falls back
+to waiting after every block.  This option cannot be combined with
+.BR \-s .
 .TP
 .B \-l\fIline\fP
 File (typically a tty) to use for the transfer instead

@@ -50,6 +50,12 @@ receiver does not advertise overlapped I/O. If a streaming receiver advertises
 a finite buffer, `zmtx` ends and acknowledges each segment before that buffer
 would be exceeded.
 
+`zmtx -w32K` limits transmitted but unacknowledged data to a fixed 32 KiB
+window. Values are byte counts with an optional binary `K` or `M` suffix. A
+window must contain at least four selected maximum-size subpackets, and cannot
+be combined with `-s`. If the receiver is not full duplex, the sender reports
+the limitation and safely falls back to one-block acknowledgements.
+
 ## Intended audience
 
 the intended audience of this document are programmers looking for

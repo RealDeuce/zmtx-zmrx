@@ -251,6 +251,7 @@ class ZmodemTests(unittest.TestCase):
         self.assertEqual(bytes(peer.byte() for _ in range(2)), b"OO")
         stderr = process.communicate(timeout=10)[1]
         self.assertEqual(process.returncode, 0, stderr.decode(errors="replace"))
+        return stderr
 
     def test_boundary_sized_self_transfers(self):
         sizes = (0, 1, 1023, 1024, 1025, 4097)
@@ -433,6 +434,115 @@ class ZmodemTests(unittest.TestCase):
                 if process.poll() is None:
                     process.kill()
                     process.wait()
+
+    def test_sender_enforces_fixed_window(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            payload = bytes(index & 0xFF for index in range(6500))
+            source = Path(temporary) / "window.bin"
+            source.write_bytes(payload)
+            process, peer, zrinit = self.start_sender(
+                temporary, source.name, "-w4K")
+            try:
+                frame_type, position, _ = peer.header()
+                self.assertEqual((frame_type, position), (ZDATA, 0))
+                offset = 0
+                for _ in range(4):
+                    chunk, frame_end = peer.data()
+                    self.assertEqual((len(chunk), frame_end), (1024, ZCRCQ))
+                    self.assertEqual(chunk, payload[offset:offset + 1024])
+                    offset += 1024
+
+                peer.sock.settimeout(0.05)
+                with self.assertRaises(socket.timeout):
+                    peer.byte()
+                peer.sock.settimeout(10)
+                peer.send(hex_header(ZACK, 2048))
+
+                for _ in range(2):
+                    chunk, frame_end = peer.data()
+                    self.assertEqual((len(chunk), frame_end), (1024, ZCRCQ))
+                    self.assertEqual(chunk, payload[offset:offset + 1024])
+                    offset += 1024
+
+                peer.send(hex_header(ZACK, 1024))
+                peer.sock.settimeout(0.05)
+                with self.assertRaises(socket.timeout):
+                    peer.byte()
+                peer.sock.settimeout(10)
+                peer.send(hex_header(ZACK, offset))
+
+                chunk, frame_end = peer.data()
+                self.assertEqual((chunk, frame_end), (payload[offset:], ZCRCE))
+                self.finish_sender(peer, process, zrinit, len(payload))
+            finally:
+                peer.sock.close()
+                if process.poll() is None:
+                    process.kill()
+                    process.wait()
+
+    def test_window_falls_back_without_full_duplex(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            payload = b"not full duplex"
+            source = Path(temporary) / "fallback.bin"
+            source.write_bytes(payload)
+            process, peer, zrinit = self.start_sender(
+                temporary, source.name, "-v", "-w4K", flags=2)
+            try:
+                frame_type, position, _ = peer.header()
+                self.assertEqual((frame_type, position), (ZDATA, 0))
+                chunk, frame_end = peer.data()
+                self.assertEqual((chunk, frame_end), (payload, ZCRCW))
+                peer.send(hex_header(ZACK, len(payload)))
+                stderr = self.finish_sender(peer, process, zrinit, len(payload))
+                self.assertIn(b"receiver is not full duplex", stderr)
+            finally:
+                peer.sock.close()
+                if process.poll() is None:
+                    process.kill()
+                    process.wait()
+
+    def test_window_restarts_after_future_acknowledgement(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            payload = bytes(index & 0xFF for index in range(1500))
+            source = Path(temporary) / "future-ack.bin"
+            source.write_bytes(payload)
+            process, peer, zrinit = self.start_sender(
+                temporary, source.name, "-w4K")
+            try:
+                peer.send(hex_header(ZACK, 5000))
+                frame_type, position, _ = peer.header()
+                self.assertEqual((frame_type, position), (ZDATA, 0))
+                chunk, frame_end = peer.data()
+                self.assertEqual((chunk, frame_end), (payload[:1024], ZCRCQ))
+
+                frame_type, position, _ = peer.header()
+                self.assertEqual((frame_type, position), (ZDATA, 0))
+                received = bytearray()
+                frame_end = ZCRCG
+                while frame_end == ZCRCG:
+                    chunk, frame_end = peer.data()
+                    received.extend(chunk)
+                self.assertEqual((bytes(received), frame_end), (payload, ZCRCE))
+                self.finish_sender(peer, process, zrinit, len(payload))
+            finally:
+                peer.sock.close()
+                if process.poll() is None:
+                    process.kill()
+                    process.wait()
+
+    def test_sender_rejects_invalid_window_options(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            source = Path(temporary) / "unused.bin"
+            source.write_bytes(b"unused")
+            for options in (("-wgarbage",), ("-w3K",),
+                            ("-8", "-w16K"), ("-s", "-w4K")):
+                with self.subTest(options=options):
+                    result = subprocess.run(
+                        [str(ZMTX), *options, source.name], cwd=temporary,
+                        stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                        stderr=subprocess.PIPE, timeout=10,
+                    )
+                    self.assertEqual(result.returncode, 1)
 
     def test_receiver_acknowledges_committed_position_and_ignores_length_estimate(self):
         with tempfile.TemporaryDirectory() as temporary:

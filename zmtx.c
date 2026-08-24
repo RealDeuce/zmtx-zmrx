@@ -33,6 +33,7 @@
  */
 
 #include <ctype.h>
+#include <errno.h>
 #include <stdio.h>
 #include <fcntl.h>
 #include <sys/types.h>
@@ -61,9 +62,11 @@ char * line = NULL;												/* device to use for io */
 bool opt_v = false;											/* show progress output */
 bool opt_d = false;											/* show debug output */
 bool opt_s = false;											/* disable streaming */
+char * window_argument;
 size_t subpacket_size = ZBLOCKLEN;							/* current data subpacket size */
 size_t max_subpacket_size = ZBLOCKLEN;						/* selected maximum data subpacket size */
 uint16_t receiver_buffer_size;
+uint32_t window_size;
 int n_files_remaining;
 uint8_t tx_data_subpacket[ZMAXSPLEN];
 
@@ -112,6 +115,63 @@ reduce_subpacket_size(void)
 		fprintf(stderr,"zmtx: reducing data subpacket size to %zu bytes"
 		    " (maximum %zu)\n",subpacket_size,max_subpacket_size);
 	}
+}
+
+static bool
+parse_window_size(const char * text,uint32_t * value)
+
+{
+	char * end;
+	uintmax_t multiplier = 1;
+	uintmax_t parsed;
+
+	if (text == NULL || *text == '\0' || *text == '-') {
+		return false;
+	}
+	errno = 0;
+	parsed = strtoumax(text,&end,10);
+	if (text == end || errno == ERANGE) {
+		return false;
+	}
+	if (*end != '\0') {
+		if (end[1] != '\0') {
+			return false;
+		}
+		switch (toupper((unsigned char)*end)) {
+			case 'K':
+				multiplier = UINTMAX_C(1024);
+				break;
+			case 'M':
+				multiplier = UINTMAX_C(1024) * UINTMAX_C(1024);
+				break;
+			default:
+				return false;
+		}
+	}
+	if (parsed == 0 || parsed > UINT32_MAX / multiplier) {
+		return false;
+	}
+	*value = (uint32_t)(parsed * multiplier);
+	return true;
+}
+
+static bool
+accept_acknowledgement(uint32_t sent_position,uint32_t * acknowledged)
+
+{
+	uint32_t position = zmodem_header_position(rxd_header);
+
+	if (position > sent_position) {
+		if (opt_d) {
+			fprintf(stderr,"zmtx: invalid acknowledgement position %" PRIu32
+			    " beyond sent position %" PRIu32 "\n",position,sent_position);
+		}
+		return false;
+	}
+	if (position > *acknowledged) {
+		*acknowledged = position;
+	}
+	return true;
 }
 
 /* 
@@ -163,12 +223,24 @@ send_from(char * name,FILE * fp)
 {
 	bool frame_open = false;
 	bool stop_after_ack;
-	bool wait_each_block = opt_s || !can_overlap_io;
+	bool window_enabled = window_size != 0 && can_full_duplex;
+	bool wait_each_block = opt_s || !can_overlap_io ||
+	    (window_size != 0 && !can_full_duplex);
 	size_t n;
 	size_t read_size;
 	size_t segment_sent = 0;
 	off_t position;
+	uint32_t acknowledged_position;
+	uint32_t acknowledgement_interval = window_size / 4;
+	uint32_t last_ack_request;
 	uint8_t zdata_frame[] = { ZDATA, 0, 0, 0, 0 };
+
+	position = ftello(fp);
+	if (position < 0 || (uintmax_t)position > UINT32_MAX) {
+		return ZFERR;
+	}
+	acknowledged_position = (uint32_t)position;
+	last_ack_request = acknowledged_position;
 	/*
 	 * send the data in the file
 	 */
@@ -182,6 +254,20 @@ send_from(char * name,FILE * fp)
 			return ZFERR;
 		}
 		wire_position = (uint32_t)position;
+		if (window_enabled) {
+			while (wire_position - acknowledged_position >= window_size) {
+				int type = rx_header(10000);
+
+				if (type == ZACK) {
+					if (!accept_acknowledgement(wire_position,
+					    &acknowledged_position)) {
+						return ZNAK;
+					}
+					continue;
+				}
+				return type;
+			}
+		}
 		if (!frame_open) {
 			zmodem_set_header_position(zdata_frame,wire_position);
 			if (tx_header(zdata_frame) != 0) {
@@ -198,6 +284,10 @@ send_from(char * name,FILE * fp)
 		 * read a block from the file
 		 */
 		read_size = subpacket_size;
+		if (window_enabled &&
+		    read_size > window_size - (wire_position - acknowledged_position)) {
+			read_size = window_size - (wire_position - acknowledged_position);
+		}
 		if (receiver_buffer_size != 0 &&
 		    read_size > (size_t)receiver_buffer_size - segment_sent) {
 			read_size = (size_t)receiver_buffer_size - segment_sent;
@@ -225,6 +315,11 @@ send_from(char * name,FILE * fp)
 		else if (receiver_buffer_size != 0 &&
 		    segment_sent + n == receiver_buffer_size) {
 			frame_end = ZCRCW;
+		}
+		else if (window_enabled &&
+		    ((uint32_t)position - last_ack_request >= acknowledgement_interval ||
+		    (uint32_t)position - acknowledged_position == window_size)) {
+			frame_end = ZCRCQ;
 		}
 		else {
 			frame_end = ZCRCG;
@@ -254,6 +349,8 @@ send_from(char * name,FILE * fp)
 			if (type != ZACK) {
 				return type;
 			}
+			acknowledged_position = (uint32_t)position;
+			last_ack_request = acknowledged_position;
 			frame_open = false;
 			segment_sent = 0;
 			increase_subpacket_size();
@@ -262,6 +359,9 @@ send_from(char * name,FILE * fp)
 				return ZACK;
 			}
 			continue;
+		}
+		if (frame_end == ZCRCQ) {
+			last_ack_request = (uint32_t)position;
 		}
 
 		/* 
@@ -275,7 +375,13 @@ send_from(char * name,FILE * fp)
 			c = rx_raw(1000);
 			if ((c & 0x7f) == ZPAD) {
 				type = rx_header(1000);
-				if (type != TIMEOUT && type != ZACK) {
+				if (type == ZACK) {
+					if (!accept_acknowledgement((uint32_t)position,
+					    &acknowledged_position)) {
+						return ZNAK;
+					}
+				}
+				else if (type != TIMEOUT) {
 					return type;
 				}
 			}
@@ -588,6 +694,7 @@ usage(void)
 	printf("	-4          use ZedZap 4 KiB data subpackets\n");
 	printf("	-8          use ZedZap 8 KiB data subpackets\n");
 	printf("	-s          wait for an acknowledgement after each block\n");
+	printf("	-wbytes     limit unacknowledged data (K and M suffixes allowed)\n");
 	printf("	-n    		transfer if source is newer\n");
 	printf("	-o    	    overwrite if exists\n");
 	printf("	-p          protect (don't overwrite if exists)\n");
@@ -624,6 +731,7 @@ main(int argc,char ** argv)
 				OPT_BOOL('D',opt_d);
 				OPT_BOOL('V',opt_v);
 				OPT_BOOL('S',opt_s);
+				OPT_STRING('W',window_argument);
 
 				OPT_BOOL('N',management_newer);
 				OPT_BOOL('O',management_clobber);
@@ -639,6 +747,16 @@ main(int argc,char ** argv)
 
 	if (opt_d) {
 		opt_v = true;
+	}
+	if (window_argument != NULL &&
+	    (!parse_window_size(window_argument,&window_size) ||
+	    window_size < 4 * max_subpacket_size)) {
+		fprintf(stderr,"zmtx: window must hold at least four maximum-size blocks\n");
+		usage();
+	}
+	if (opt_s && window_size != 0) {
+		fprintf(stderr,"zmtx: -s and -w cannot be used together\n");
+		usage();
 	}
 
 	if ((management_newer + management_clobber + management_protect) > 1 || argc == 0) {
@@ -709,6 +827,9 @@ main(int argc,char ** argv)
 	 */
 
 	parse_zrinit();
+	if (window_size != 0 && !can_full_duplex && opt_v) {
+		fprintf(stderr,"zmtx: receiver is not full duplex; using one-block acknowledgements\n");
+	}
 
 	if (opt_d) {
 		fprintf(stderr,"receiver %s full duplex\n"          ,can_full_duplex               ? "can"      : "can't");
