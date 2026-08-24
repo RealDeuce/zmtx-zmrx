@@ -61,13 +61,13 @@ enum send_result {
 static struct zmodem protocol;
 static struct zmodem_posix_io posix_io;
 
-static char * line = NULL;												/* device to use for io */
-static bool opt_v = false;											/* show progress output */
-static bool opt_d = false;											/* show debug output */
-static bool opt_s = false;											/* disable streaming */
+static char * line = NULL;				/* device to use for io */
+static bool opt_v = false;				/* show progress output */
+static bool opt_d = false;				/* show debug output */
+static bool opt_s = false;				/* disable streaming */
 static char * window_argument;
-static size_t subpacket_size = ZBLOCKLEN;							/* current data subpacket size */
-static size_t max_subpacket_size = ZBLOCKLEN;						/* selected maximum data subpacket size */
+static size_t subpacket_size = ZBLOCKLEN;		/* current data subpacket size */
+static size_t max_subpacket_size = ZBLOCKLEN;		/* selected maximum data subpacket size */
 static uint16_t receiver_buffer_size;
 static uint32_t window_size;
 static int n_files_remaining;

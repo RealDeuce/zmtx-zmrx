@@ -63,18 +63,18 @@ enum receive_result {
 static struct zmodem protocol;
 static struct zmodem_posix_io posix_io;
 
-static FILE * fp = NULL;												/* fp of file being received or NULL */
-static time_t mdate;													/* file date of file being received */
+static FILE * fp = NULL;				/* fp of file being received or NULL */
+static time_t mdate;					/* file date of file being received */
 static bool mdate_known;
-static char filename[0x80];											/* filename of file being received */
-static char * name;													/* pointer to the part of the filename used in the actual open */
+static char filename[0x80];				/* filename of file being received */
+static char * name;					/* pointer to the part of the filename used in the actual open */
 
-static char * line = NULL;												/* device to use for io */
-static bool opt_v = false;												/* show progress output */
-static bool opt_d = false;												/* show debug output */
+static char * line = NULL;				/* device to use for io */
+static bool opt_v = false;				/* show progress output */
+static bool opt_d = false;				/* show debug output */
 static bool opt_q = false;
 static bool opt_s = false;
-static bool junk_pathnames = false;										/* junk incoming path names or keep them */
+static bool junk_pathnames = false;			/* junk incoming path names or keep them */
 static uint8_t rx_data_subpacket[ZMAXSPLEN];
 
 static uintmax_t current_file_size;
