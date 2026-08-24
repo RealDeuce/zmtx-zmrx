@@ -1,7 +1,34 @@
 this file was abstracted from the original zmodem.doc after one
 night I decided I had enough of all this marketing hype and wanted
 to know what zmodem was all about without having to wade hip-deep
-through advertising slogans. this text is !(C) MCS 1994
+through advertising slogans.
+
+Copyright (c) 1994 Stephen Hurd
+All rights reserved.
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions are met:
+
+1. Redistributions of source code must retain the above copyright notice,
+   this list of conditions and the following disclaimer.
+
+2. Redistributions in binary form must reproduce the above copyright notice,
+   this list of conditions and the following disclaimer in the documentation
+   and/or other materials provided with the distribution.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
+FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
+SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
+CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
+OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+Special thanks to Jacques Mattheij, formerly of Mattheij Computer Service,
+and original author of zmtx/zmrx.
 
 the intended audience of this document are programmers looking for
 a compact reference text on how zmodem works and what you should
@@ -11,10 +38,7 @@ examples and data structures are strongly biased towards the 'C'
 language. (what ? are there other languages ??)
 
 a lot of work went into the preparation of this document; although
-I'm afraid I can't guarantee it's correctness. Jacques Mattheij
-or MCS shall not be liable for any damages whatsoever. this file
-is provided 'as is' for no fee whatsoever. use is at your own risk.
-if these terms are unacceptable to you than delete these files NOW!.
+its correctness cannot be guaranteed.
 
 changes relative to zmodem.doc as provided by various sources:
 
@@ -101,7 +125,6 @@ Whenever I give an example of how not to program in 'C' I refer to the
 rz.c and sz.c sources. In more than one way these are true 'classics'.
 If you intend to implement zmodem don't bother with these dinosaurs
 (to use a popular term); better to write it clean from the start.
-
 
 
 
