@@ -25,6 +25,35 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 Special thanks to Jacques Mattheij, formerly of Mattheij Computer Service,
 and original author of zmtx/zmrx.
 
+2.02 release notes (24/08/26)
+
+This release substantially restructures the implementation around a documented
+high-integrity C coding profile. Protocol state is now instance-owned and uses
+an explicit I/O interface, with POSIX terminal and descriptor operations
+isolated in a platform adapter. Protocol and file I/O failures are checked and
+reported consistently, including broken output pipes and delayed file-write
+errors.
+
+The C99 type model has been tightened throughout. Wire values and constants use
+matching exact-width unsigned types, conversions at platform boundaries are
+checked, and proven non-aliasing contracts are documented with carefully
+limited use of restrict. Generated immutable slicing-by-4 tables retain the
+CRC32 performance improvement without mutable initialization state.
+
+Verification now includes 66 end-to-end behaviour tests, focused protocol and
+POSIX adapter tests, strict Clang and GCC diagnostics, static analysis,
+clang-tidy, address and undefined-behaviour sanitizers, fuzz smoke testing and
+structural coverage. The automated gates require at least 90 percent branch
+coverage and 100 percent MC/DC coverage for applicable decisions, and CI tests
+both compilers on Linux and Clang on macOS. These measures improve assurance;
+they do not constitute safety qualification or compliance with an external
+coding standard.
+
+Protocol I/O performance has been improved with bounded buffered writes,
+read-ahead input and split fast paths for common receive-side decoding. A
+double close when the receiver skipped an existing file has also been fixed,
+and its formerly timing-dependent regression test is now deterministic.
+
 2.01 release notes (24/08/26)
 
 This maintenance release improves packaging and documentation without
