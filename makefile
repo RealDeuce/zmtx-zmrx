@@ -24,6 +24,9 @@ check: all tests/test_crc
 	./tests/test_crc
 	$(PYTHON) tests/test_zmodem.py
 
+check-install: all
+	MAKE='$(MAKE)' sh tests/test_install.sh
+
 tests/test_crc: tests/test_crc.c crctab.o crctab.h
 	$(CC) $(CPPFLAGS) $(CFLAGS) -I. \
 	    tests/test_crc.c crctab.o $(LDFLAGS) $(LDLIBS) $(LIBS) \
@@ -60,4 +63,4 @@ uninstall:
 clean:
 	rm -f *.o zmtx zmrx tests/test_crc
 
-.PHONY: all check install install-strip uninstall clean
+.PHONY: all check check-install install install-strip uninstall clean
