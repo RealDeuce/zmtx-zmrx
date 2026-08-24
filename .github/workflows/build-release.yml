@@ -14,14 +14,21 @@ permissions:
 
 jobs:
   build:
-    name: Build with ${{ matrix.compiler }}
-    runs-on: ubuntu-latest
+    name: Build on ${{ matrix.name }}
+    runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
       matrix:
-        compiler:
-          - gcc
-          - clang
+        include:
+          - name: Ubuntu with GCC
+            runner: ubuntu-latest
+            compiler: gcc
+          - name: Ubuntu with Clang
+            runner: ubuntu-latest
+            compiler: clang
+          - name: macOS with Clang
+            runner: macos-latest
+            compiler: clang
 
     steps:
       - name: Check out source
