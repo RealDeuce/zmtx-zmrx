@@ -528,8 +528,8 @@ rx(struct zmodem * zmodem,int timeout_ms)
 	 * will be received.
 	 */
 
-	while (true) {
-		while (true) {
+	for (;;) {
+		for (;;) {
 			c = rx_raw(zmodem,timeout_ms);
 			if (c < 0) {
 				return c;
@@ -557,7 +557,7 @@ rx(struct zmodem * zmodem,int timeout_ms)
 		 * (or something illegal; then back to the top)
 		 */
 
-		while (true) {
+		for (;;) {
 			c = rx_raw(zmodem,timeout_ms);
 			if (c < 0) {
 				return c;
@@ -801,8 +801,6 @@ rx_data(struct zmodem * zmodem,uint8_t * p,size_t capacity,size_t * l,
 	*frame_end = (uint8_t)sub_frame_type;
 
 	switch (sub_frame_type)  {
-		case TIMEOUT:
-			return TIMEOUT;
 		/*
 		 * frame continues non-stop
 		 */
@@ -1144,7 +1142,7 @@ rx_header_and_check(struct zmodem * zmodem,int timeout_ms)
 
 {
 	int type;
-	while (true) {
+	for (;;) {
 		type = rx_header_raw(zmodem,timeout_ms,true);
 
 		if (type != INVHDR) {

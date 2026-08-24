@@ -1,9 +1,15 @@
+#define _XOPEN_SOURCE 600
+
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <fcntl.h>
+#include <signal.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/select.h>
+#include <sys/wait.h>
 #include <unistd.h>
 
 #include "zmdm.h"
@@ -16,6 +22,12 @@ expect(bool condition,const char * description)
 		(void)fprintf(stderr,"test_posix_io: %s\n",description);
 	}
 	return condition;
+}
+
+static void
+catch_signal(int signal_number)
+{
+	(void)signal_number;
 }
 
 static bool
@@ -157,6 +169,124 @@ test_owned_descriptor(void)
 	return passed;
 }
 
+static bool
+test_terminal_transport(void)
+{
+	struct zmodem_posix_io posix_io;
+	char * slave_name;
+	int master_fd;
+	int slave_fd;
+	bool passed = true;
+
+	master_fd = posix_openpt(O_RDWR | O_NOCTTY);
+	if (master_fd < 0) {
+		return expect(false,"open pseudo-terminal master");
+	}
+	if ((grantpt(master_fd) != 0) || (unlockpt(master_fd) != 0)) {
+		(void)close(master_fd);
+		return expect(false,"prepare pseudo-terminal");
+	}
+	slave_name = ptsname(master_fd);
+	if (slave_name == NULL) {
+		(void)close(master_fd);
+		return expect(false,"name pseudo-terminal slave");
+	}
+	slave_fd = open(slave_name,O_RDWR | O_NOCTTY);
+	if (slave_fd < 0) {
+		(void)close(master_fd);
+		return expect(false,"open pseudo-terminal slave");
+	}
+	zmodem_posix_io_init(&posix_io,slave_fd,slave_fd);
+	passed = expect(zmodem_posix_io_make_raw(&posix_io) == 0,
+	    "configure pseudo-terminal raw mode") && passed;
+	passed = expect(posix_io.termios_saved,"save terminal attributes") &&
+	    passed;
+	zmodem_posix_io_restore(&posix_io);
+	passed = expect(!posix_io.termios_saved,"restore terminal attributes") &&
+	    passed;
+	passed = expect(close(slave_fd) == 0,"close pseudo-terminal slave") &&
+	    passed;
+	passed = expect(close(master_fd) == 0,"close pseudo-terminal master") &&
+	    passed;
+	return passed;
+}
+
+static bool
+test_directory_read_failures(void)
+{
+	struct zmodem_posix_io posix_io;
+	struct zmodem_io io;
+	uint8_t byte;
+	size_t count;
+	int directory_fd;
+	bool passed = true;
+
+	directory_fd = open("/",O_RDONLY);
+	if (directory_fd < 0) {
+		return expect(false,"open directory descriptor");
+	}
+	zmodem_posix_io_init(&posix_io,directory_fd,-1);
+	zmodem_posix_io_bind(&io,&posix_io);
+	passed = expect(io.read(io.context,&byte,1U,&count,0) ==
+	    ZMODEM_IO_ERROR,"directory read error") && passed;
+	passed = expect(io.purge(io.context) == ZMODEM_IO_ERROR,
+	    "directory purge error") && passed;
+	passed = expect(close(directory_fd) == 0,"close directory descriptor") &&
+	    passed;
+	return passed;
+}
+
+static bool
+test_interrupted_wait(void)
+{
+	struct zmodem_posix_io posix_io;
+	struct zmodem_io io;
+	struct sigaction action;
+	struct sigaction previous;
+	uint8_t byte;
+	size_t count;
+	int descriptors[2];
+	pid_t child;
+	bool passed = true;
+
+	if (pipe(descriptors) != 0) {
+		return expect(false,"create interrupted-wait pipe");
+	}
+	(void)memset(&action,0,sizeof(action));
+	action.sa_handler = catch_signal;
+	if ((sigemptyset(&action.sa_mask) != 0) ||
+	    (sigaction(SIGUSR1,&action,&previous) != 0)) {
+		(void)close(descriptors[0]);
+		(void)close(descriptors[1]);
+		return expect(false,"install interrupted-wait handler");
+	}
+	child = fork();
+	if (child == 0) {
+		(void)usleep(10000U);
+		(void)kill(getppid(),SIGUSR1);
+		_exit(0);
+	}
+	if (child < 0) {
+		(void)sigaction(SIGUSR1,&previous,NULL);
+		(void)close(descriptors[0]);
+		(void)close(descriptors[1]);
+		return expect(false,"fork interrupted-wait helper");
+	}
+	zmodem_posix_io_init(&posix_io,descriptors[0],descriptors[1]);
+	zmodem_posix_io_bind(&io,&posix_io);
+	passed = expect(io.read(io.context,&byte,1U,&count,250) == ZMODEM_TIMEOUT,
+	    "retry interrupted select") && passed;
+	passed = expect(waitpid(child,NULL,0) == child,
+	    "wait for interrupted-wait helper") && passed;
+	passed = expect(sigaction(SIGUSR1,&previous,NULL) == 0,
+	    "restore interrupted-wait handler") && passed;
+	passed = expect(close(descriptors[0]) == 0,
+	    "close interrupted-wait reader") && passed;
+	passed = expect(close(descriptors[1]) == 0,
+	    "close interrupted-wait writer") && passed;
+	return passed;
+}
+
 int
 main(void)
 {
@@ -166,5 +296,10 @@ main(void)
 	passed = test_reported_failures() && passed;
 	passed = test_eof_and_closed_descriptor() && passed;
 	passed = test_owned_descriptor() && passed;
+	passed = test_terminal_transport() && passed;
+	passed = test_directory_read_failures() && passed;
+	passed = test_interrupted_wait() && passed;
+	passed = expect(zmodem_posix_ignore_sigpipe() == 0,
+	    "ignore broken-pipe signal") && passed;
 	return passed ? 0 : 1;
 }

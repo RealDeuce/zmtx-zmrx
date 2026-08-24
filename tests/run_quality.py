@@ -19,7 +19,7 @@ COMMON = [
 ]
 PRODUCTION = ["zmtx.c", "zmrx.c", "zmdm.c", "zmdm_posix.c", "crctab.c"]
 MINIMUM_LINE_COVERAGE = 65.0
-MINIMUM_BRANCH_COVERAGE = 50.0
+MINIMUM_BRANCH_COVERAGE = 90.0
 REQUIRED_MCDC_COVERAGE = 100.0
 
 
