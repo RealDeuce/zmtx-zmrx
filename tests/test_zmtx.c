@@ -158,6 +158,52 @@ test_polled_failure(int poll_result,int read_result,const char * description)
 	return passed;
 }
 
+static bool
+test_cleanup_failure(void)
+{
+	char diagnostic[128];
+	ssize_t length;
+	int descriptors[2];
+	int saved_stderr;
+	bool passed = true;
+
+	if (pipe(descriptors) != 0) {
+		return expect_sender(false,"create cleanup diagnostic pipe");
+	}
+	saved_stderr = dup(STDERR_FILENO);
+	if (saved_stderr < 0 || dup2(descriptors[1],STDERR_FILENO) < 0) {
+		if (saved_stderr >= 0) {
+			(void)close(saved_stderr);
+		}
+		(void)close(descriptors[0]);
+		(void)close(descriptors[1]);
+		return expect_sender(false,"redirect cleanup diagnostic");
+	}
+	zmodem_posix_io_init(&posix_io,-1,-1);
+	posix_io.output_count = 1U;
+	passed = expect_sender(cleanup(0) == EXIT_CLEANUP_FAILED,
+	    "cleanup failure changes successful status") && passed;
+	passed = expect_sender(cleanup(EXIT_TRANSFER_FAILED) ==
+	    EXIT_TRANSFER_FAILED,"cleanup preserves transfer failure") && passed;
+	passed = expect_sender(dup2(saved_stderr,STDERR_FILENO) >= 0,
+	    "restore cleanup diagnostic output") && passed;
+	passed = expect_sender(close(saved_stderr) == 0,
+	    "close saved standard error") && passed;
+	passed = expect_sender(close(descriptors[1]) == 0,
+	    "close cleanup diagnostic writer") && passed;
+	length = read(descriptors[0],diagnostic,sizeof(diagnostic) - 1U);
+	passed = expect_sender(length > 0,"read cleanup diagnostic") && passed;
+	if (length > 0) {
+		diagnostic[(size_t)length] = '\0';
+		passed = expect_sender(strstr(diagnostic,
+		    "zmtx: transfer line cleanup failed\n") != NULL,
+		    "diagnose cleanup failure") && passed;
+	}
+	passed = expect_sender(close(descriptors[0]) == 0,
+	    "close cleanup diagnostic reader") && passed;
+	return passed;
+}
+
 int
 main(void)
 {
@@ -167,5 +213,6 @@ main(void)
 	    "propagate poll failure") && passed;
 	passed = test_polled_failure(1,ZMODEM_IO_ERROR,
 	    "propagate read failure") && passed;
+	passed = test_cleanup_failure() && passed;
 	return passed ? 0 : 1;
 }

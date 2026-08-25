@@ -43,6 +43,16 @@
 
 #include "zmdm.h"
 
+#ifndef ZMODEM_POSIX_CLOSE
+#define ZMODEM_POSIX_CLOSE close
+#endif
+#ifndef ZMODEM_POSIX_TCSETATTR
+#define ZMODEM_POSIX_TCSETATTR tcsetattr
+#endif
+#ifndef ZMODEM_POSIX_WRITE
+#define ZMODEM_POSIX_WRITE write
+#endif
+
 static int
 wait_for_input(int fd,int timeout_ms)
 {
@@ -116,7 +126,8 @@ posix_flush(void * context)
 		ssize_t result;
 
 		for (;;) {
-			result = write(io->output_fd,&io->output_buffer[offset],
+			result = ZMODEM_POSIX_WRITE(io->output_fd,
+			    &io->output_buffer[offset],
 			    io->output_count - offset);
 			if (result >= 0) {
 				break;
@@ -261,31 +272,43 @@ zmodem_posix_io_make_raw(struct zmodem_posix_io * io)
 	attributes.c_cflag |= CS8;
 	attributes.c_cc[VMIN] = 1;
 	attributes.c_cc[VTIME] = 0;
-	if (tcsetattr(io->input_fd,TCSANOW,&attributes) != 0) {
-		io->termios_saved = false;
+	if (ZMODEM_POSIX_TCSETATTR(io->input_fd,TCSANOW,&attributes) != 0) {
 		return -1;
 	}
 	return 0;
 }
 
-void
+int
 zmodem_posix_io_restore(struct zmodem_posix_io * io)
 {
 	if (io->termios_saved) {
-		(void)tcsetattr(io->input_fd,TCSANOW,&io->saved_termios);
+		if (ZMODEM_POSIX_TCSETATTR(io->input_fd,TCSANOW,
+		    &io->saved_termios) != 0) {
+			return -1;
+		}
 		io->termios_saved = false;
 	}
+	return 0;
 }
 
-void
+int
 zmodem_posix_io_close(struct zmodem_posix_io * io)
 {
-	(void)posix_flush(io);
-	zmodem_posix_io_restore(io);
+	int result = 0;
+
+	if (posix_flush(io) != ZMODEM_OK) {
+		result = -1;
+	}
+	if (zmodem_posix_io_restore(io) != 0) {
+		result = -1;
+	}
 	if (io->owned_fd >= 0) {
-		(void)close(io->owned_fd);
+		if (ZMODEM_POSIX_CLOSE(io->owned_fd) != 0) {
+			result = -1;
+		}
 		io->owned_fd = -1;
 	}
+	return result;
 }
 
 void

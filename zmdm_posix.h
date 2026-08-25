@@ -26,8 +26,8 @@ void zmodem_posix_io_init(struct zmodem_posix_io *, int, int);
 int zmodem_posix_ignore_sigpipe(void);
 int zmodem_posix_io_open(struct zmodem_posix_io *, const char *);
 int zmodem_posix_io_make_raw(struct zmodem_posix_io *);
-void zmodem_posix_io_restore(struct zmodem_posix_io *);
-void zmodem_posix_io_close(struct zmodem_posix_io *);
+int zmodem_posix_io_restore(struct zmodem_posix_io *);
+int zmodem_posix_io_close(struct zmodem_posix_io *);
 void zmodem_posix_io_bind(struct zmodem_io *, struct zmodem_posix_io *);
 
 #endif

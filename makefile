@@ -20,11 +20,14 @@ PYTHON ?= python3
 
 all:	zmtx zmrx
 
-check: all tests/test_crc tests/test_zmdm tests/test_zmtx tests/test_posix_io
+check: all tests/test_crc tests/test_zmdm tests/test_zmtx tests/test_zmrx \
+	    tests/test_posix_io tests/test_posix_cleanup
 	./tests/test_crc
 	./tests/test_zmdm
 	./tests/test_zmtx
+	./tests/test_zmrx
 	./tests/test_posix_io
+	./tests/test_posix_cleanup
 	$(PYTHON) tests/test_zmodem.py
 
 check-install: all
@@ -60,10 +63,21 @@ tests/test_zmtx: tests/test_zmtx.c zmtx.c version.h zmdm.o zmdm_posix.o \
 	    tests/test_zmtx.c zmdm.o zmdm_posix.o crctab.o \
 	    $(LDFLAGS) $(LDLIBS) $(LIBS) -o tests/test_zmtx
 
+tests/test_zmrx: tests/test_zmrx.c zmrx.c version.h zmdm.o zmdm_posix.o \
+	    crctab.o zmdm.h zmdm_posix.h zmodem.h crctab.h
+	$(CC) $(CPPFLAGS) $(CFLAGS) -I. \
+	    tests/test_zmrx.c zmdm.o zmdm_posix.o crctab.o \
+	    $(LDFLAGS) $(LDLIBS) $(LIBS) -o tests/test_zmrx
+
 tests/test_posix_io: tests/test_posix_io.c zmdm_posix.o zmdm_posix.h zmdm.h
 	$(CC) $(CPPFLAGS) $(CFLAGS) -I. \
 	    tests/test_posix_io.c zmdm_posix.o $(LDFLAGS) $(LDLIBS) $(LIBS) \
 	    -o tests/test_posix_io
+
+tests/test_posix_cleanup: tests/test_posix_cleanup.c zmdm_posix.c \
+	    zmdm_posix.h zmdm.h
+	$(CC) $(CPPFLAGS) $(CFLAGS) -I. tests/test_posix_cleanup.c \
+	    $(LDFLAGS) $(LDLIBS) $(LIBS) -o tests/test_posix_cleanup
 
 zmtx:	zmtx.o zmdm.o zmdm_posix.o crctab.o
 	$(CC) $(LDFLAGS) zmtx.o zmdm.o zmdm_posix.o crctab.o \
@@ -98,7 +112,7 @@ uninstall:
 
 clean:
 	rm -f *.o zmtx zmrx tests/test_crc tests/test_zmdm tests/test_zmtx \
-	    tests/test_posix_io
+	    tests/test_zmrx tests/test_posix_io tests/test_posix_cleanup
 
 .PHONY: all check check-install check-static check-sanitize check-fuzz \
 	coverage quality install install-strip uninstall clean

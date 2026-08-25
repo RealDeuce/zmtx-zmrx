@@ -80,7 +80,8 @@ test_pipe_transport(void)
 	passed = expect(io.poll(io.context) == 0,"purged poll") && passed;
 	passed = expect(zmodem_posix_io_make_raw(&posix_io) == 0,
 	    "non-terminal raw operation") && passed;
-	zmodem_posix_io_close(&posix_io);
+	passed = expect(zmodem_posix_io_close(&posix_io) == 0,
+	    "close pipe transport") && passed;
 	passed = expect(close(input_pipe[0]) == 0,"close input read") && passed;
 	passed = expect(close(input_pipe[1]) == 0,"close input write") && passed;
 	passed = expect(close(output_pipe[0]) == 0,"close output read") && passed;
@@ -134,7 +135,8 @@ test_full_output_buffer(void)
 		passed = expect(memcmp(received,output,sizeof(output)) == 0,
 		    "buffered output bytes") && passed;
 	}
-	zmodem_posix_io_close(&posix_io);
+	passed = expect(zmodem_posix_io_close(&posix_io) == 0,
+	    "close output-buffer transport") && passed;
 	passed = expect(close(fd) == 0,"close output-buffer file") && passed;
 	return passed;
 }
@@ -224,9 +226,13 @@ test_owned_descriptor(void)
 	passed = expect(zmodem_posix_io_make_raw(&posix_io) == 0,
 	    "owned non-terminal") && passed;
 	posix_io.termios_saved = true;
-	zmodem_posix_io_restore(&posix_io);
-	passed = expect(!posix_io.termios_saved,"clear restored state") && passed;
-	zmodem_posix_io_close(&posix_io);
+	passed = expect(zmodem_posix_io_restore(&posix_io) != 0,
+	    "report invalid terminal restoration") && passed;
+	passed = expect(posix_io.termios_saved,"retain unrestored state") && passed;
+	passed = expect(zmodem_posix_io_close(&posix_io) != 0,
+	    "propagate restoration failure while closing") && passed;
+	passed = expect(posix_io.termios_saved,
+	    "retain unrestored state after close") && passed;
 	passed = expect(posix_io.owned_fd == -1,"clear owned descriptor") && passed;
 	return passed;
 }
@@ -263,7 +269,8 @@ test_terminal_transport(void)
 	    "configure pseudo-terminal raw mode") && passed;
 	passed = expect(posix_io.termios_saved,"save terminal attributes") &&
 	    passed;
-	zmodem_posix_io_restore(&posix_io);
+	passed = expect(zmodem_posix_io_restore(&posix_io) == 0,
+	    "restore terminal attributes") && passed;
 	passed = expect(!posix_io.termios_saved,"restore terminal attributes") &&
 	    passed;
 	passed = expect(close(slave_fd) == 0,"close pseudo-terminal slave") &&

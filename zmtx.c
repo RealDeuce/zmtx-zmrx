@@ -51,6 +51,7 @@
 
 #define MAX_RETRIES 10
 #define EXIT_TRANSFER_FAILED 4
+#define EXIT_CLEANUP_FAILED 5
 
 enum send_result {
 	SEND_FAILED = -1,
@@ -825,11 +826,17 @@ send_file(const char * name)
 	return SEND_FAILED;
 }
 
-static void
-cleanup(void)
+static int
+cleanup(int status)
 
 {
-	zmodem_posix_io_close(&posix_io);
+	if (zmodem_posix_io_close(&posix_io) != 0) {
+		(void)fprintf(stderr,"zmtx: transfer line cleanup failed\n");
+		if (status == 0) {
+			status = EXIT_CLEANUP_FAILED;
+		}
+	}
+	return status;
 }
 
 static void
@@ -851,9 +858,7 @@ usage(void)
 	(void)printf("	-v          verbose output\n");
 	(void)printf("	(only one of -n -c or -p may be specified)\n");
 
-	cleanup();
-
-	exit(1);
+	exit(cleanup(1));
 }
 
 int
@@ -959,8 +964,7 @@ main(int argc,char ** argv)
 
 	if (zmodem_posix_io_make_raw(&posix_io) != 0) {
 		(void)fprintf(stderr,"zmtx: can't configure transfer line\n");
-		cleanup();
-		return 2;
+		return cleanup(2);
 	}
 
 	/*
@@ -973,8 +977,7 @@ main(int argc,char ** argv)
 
 	if (rx_purge(&protocol) != ZMODEM_OK) {
 		(void)fprintf(stderr,"zmtx: can't purge transfer input\n");
-		cleanup();
-		return 3;
+		return cleanup(3);
 	}
 
 	/*
@@ -991,29 +994,24 @@ main(int argc,char ** argv)
 		i++;
 		if (i > 10) {
 			(void)fprintf(stderr,"zmtx: can't establish contact with receiver\n");
-			cleanup();
-			exit(3);
+			exit(cleanup(3));
 		}
 
 		if (tx_raw(&protocol,'z') != 0) {
 			(void)fprintf(stderr,"zmtx: output error establishing contact\n");
-			cleanup();
-			exit(3);
+			exit(cleanup(3));
 		}
 		if (tx_raw(&protocol,'m') != 0) {
 			(void)fprintf(stderr,"zmtx: output error establishing contact\n");
-			cleanup();
-			exit(3);
+			exit(cleanup(3));
 		}
 		if (tx_raw(&protocol,CR) != 0) {
 			(void)fprintf(stderr,"zmtx: output error establishing contact\n");
-			cleanup();
-			exit(3);
+			exit(cleanup(3));
 		}
 		if (tx_hex_header(&protocol,zrqinit_header) != 0) {
 			(void)fprintf(stderr,"zmtx: output error establishing contact\n");
-			cleanup();
-			exit(3);
+			exit(cleanup(3));
 		}
 	} while (rx_header(&protocol,7000) != ZRINIT);
 
@@ -1127,9 +1125,7 @@ main(int argc,char ** argv)
 		(void)fprintf(stderr,"zmtx: cleanup and exit\n");
 	}
 
-	cleanup();
-
-	exit(transfer_failed ? EXIT_TRANSFER_FAILED : 0);
+	exit(cleanup(transfer_failed ? EXIT_TRANSFER_FAILED : 0));
 
 	return 0;
 }
