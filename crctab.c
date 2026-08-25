@@ -125,6 +125,17 @@ crc16_update(uint16_t crc,uint8_t byte)
 	return (uint16_t)(crc16tab[index] ^ (uint16_t)(crc << 8) ^ byte);
 }
 
+uint16_t
+crc16_buffer_update(uint16_t crc,const uint8_t * data,size_t length)
+
+{
+	while (length-- > 0U) {
+		crc = crc16_update(crc,*data);
+		data += 1U;
+	}
+	return crc;
+}
+
 uint32_t
 crc32_byte_update(uint32_t crc,uint8_t byte)
 {

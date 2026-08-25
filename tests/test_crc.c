@@ -20,6 +20,9 @@ int
 main(void)
 
 {
+	static const uint16_t initial_states16[] = {
+		UINT16_C(0), UINT16_C(1), UINT16_C(0x1234), UINT16_MAX
+	};
 	static const uint32_t initial_states[] = {
 		UINT32_C(0), UINT32_C(1), UINT32_C(0x12345678), UINT32_MAX
 	};
@@ -51,6 +54,29 @@ main(void)
 					    " offset=%zu length=%zu expected=%" PRIx32
 					    " actual=%" PRIx32 "\n",initial_states[initial],
 					    offset,length,expected,actual);
+					return 1;
+				}
+			}
+		}
+	}
+	for (initial=0;initial<sizeof(initial_states16) /
+	    sizeof(initial_states16[0]);initial++) {
+		for (offset=0;offset<8;offset++) {
+			for (length=0;length<=1024;length++) {
+				uint16_t expected = initial_states16[initial];
+				uint16_t actual;
+
+				for (i=0;i<length;i++) {
+					expected = crc16_update(expected,data[offset + i]);
+				}
+				actual = crc16_buffer_update(initial_states16[initial],
+				    data + offset,length);
+				if (actual != expected) {
+					fprintf(stderr,"CRC16 mismatch: initial=%" PRIx16
+					    " offset=%zu length=%zu expected=%" PRIx16
+					    " actual=%" PRIx16 "\n",
+					    initial_states16[initial],offset,length,
+					    expected,actual);
 					return 1;
 				}
 			}

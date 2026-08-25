@@ -22,6 +22,7 @@ extern const uint32_t crc32tab[0x100];
 
 uint32_t crc32_update(uint32_t, const uint8_t *, size_t);
 uint16_t crc16_update(uint16_t, uint8_t);
+uint16_t crc16_buffer_update(uint16_t, const uint8_t *, size_t);
 uint32_t crc32_byte_update(uint32_t, uint8_t);
 
 #endif

@@ -503,15 +503,46 @@ rx_poll(struct zmodem * zmodem)
  * for an exit. (but that was wat session abort was all about.)
  */
 
-int
-rx_raw(struct zmodem * zmodem,int timeout_ms)
+struct rx_cursor {
+	size_t input_count;
+	size_t input_index;
+	unsigned cancel_count;
+};
+
+static inline void
+load_rx_cursor(const struct zmodem * restrict zmodem,
+    struct rx_cursor * restrict cursor)
+
+{
+	cursor->input_count = zmodem->input_count;
+	cursor->input_index = zmodem->input_index;
+	cursor->cancel_count = zmodem->cancel_count;
+}
+
+static inline void
+store_rx_cursor(struct zmodem * restrict zmodem,
+    const struct rx_cursor * restrict cursor)
+
+{
+	zmodem->input_count = cursor->input_count;
+	zmodem->input_index = cursor->input_index;
+	zmodem->cancel_count = cursor->cancel_count;
+}
+
+static inline int
+rx_cursor_byte(struct zmodem * restrict zmodem,int timeout_ms,
+    struct rx_cursor * restrict cursor)
 
 {
 	uint8_t c;
 
-	if (zmodem->input_count == 0U) {
+	if (cursor->input_count == 0U) {
 		size_t count;
-		int result = zmodem->io.read(zmodem->io.context,
+		int result;
+
+		/* Keep protocol state coherent while calling external I/O code. */
+		store_rx_cursor(zmodem,cursor);
+		result = zmodem->io.read(zmodem->io.context,
 		    zmodem->input_buffer,sizeof(zmodem->input_buffer),&count,
 		    timeout_ms);
 
@@ -521,25 +552,37 @@ rx_raw(struct zmodem * zmodem,int timeout_ms)
 		if ((count == 0U) || (count > sizeof(zmodem->input_buffer))) {
 			return ZMODEM_IO_ERROR;
 		}
-		zmodem->input_count = count;
-		zmodem->input_index = 0U;
+		cursor->input_count = count;
+		cursor->input_index = 0U;
 	}
 
-	c = zmodem->input_buffer[zmodem->input_index];
-	zmodem->input_index += 1U;
-	zmodem->input_count -= 1U;
-
-	if (c == CAN) {
-		zmodem->cancel_count += 1U;
-		if (zmodem->cancel_count == 5U) {
-			return ZMODEM_CANCELLED;
-		}
-	}
-	else {
-		zmodem->cancel_count = 0U;
-	}
+	c = zmodem->input_buffer[cursor->input_index];
+	cursor->input_index += 1U;
+	cursor->input_count -= 1U;
 
 	return c;
+}
+
+int
+rx_raw(struct zmodem * zmodem,int timeout_ms)
+
+{
+	struct rx_cursor cursor;
+	int result;
+
+	load_rx_cursor(zmodem,&cursor);
+	result = rx_cursor_byte(zmodem,timeout_ms,&cursor);
+	if (result == CAN) {
+		cursor.cancel_count += 1U;
+		if (cursor.cancel_count == 5U) {
+			result = ZMODEM_CANCELLED;
+		}
+	}
+	else if (result >= 0) {
+		cursor.cancel_count = 0U;
+	}
+	store_rx_cursor(zmodem,&cursor);
+	return result;
 }
 
 /*
@@ -627,6 +670,68 @@ rx_slow(struct zmodem * zmodem,int timeout_ms,int c)
 }
 
 static inline int
+rx_cursor(struct zmodem * restrict zmodem,int timeout_ms,
+    struct rx_cursor * restrict cursor)
+
+{
+	int c = rx_cursor_byte(zmodem,timeout_ms,cursor);
+
+	if (c < 0) {
+		return c;
+	}
+	if (c == CAN) {
+		cursor->cancel_count += 1U;
+		if (cursor->cancel_count == 5U) {
+			return ZMODEM_CANCELLED;
+		}
+	}
+	else {
+		cursor->cancel_count = 0U;
+		if (!rx_is_flow_control(c)) {
+			return c;
+		}
+	}
+	store_rx_cursor(zmodem,cursor);
+	c = rx_slow(zmodem,timeout_ms,c);
+	load_rx_cursor(zmodem,cursor);
+	return c;
+}
+
+static inline size_t
+rx_plain_span(const struct zmodem * restrict zmodem,
+    const struct rx_cursor * restrict cursor)
+
+{
+	const uint8_t * data = &zmodem->input_buffer[cursor->input_index];
+	const uint64_t ones = UINT64_C(0x0101010101010101);
+	const uint64_t highs = UINT64_C(0x8080808080808080);
+	size_t length = 0U;
+
+	while (cursor->input_count - length >= sizeof(uint64_t)) {
+		uint64_t word;
+		uint64_t zdle;
+		uint64_t flow;
+
+		/* Detect ZDLE or flow control in eight bytes at a time. */
+		(void)memcpy(&word,&data[length],sizeof(word));
+		zdle = word ^ UINT64_C(0x1818181818181818);
+		/* The four flow-control values vary only in bits 1 and 7. */
+		flow = (word & UINT64_C(0x7d7d7d7d7d7d7d7d)) ^
+		    UINT64_C(0x1111111111111111);
+		if ((((zdle - ones) & ~zdle & highs) |
+		    ((flow - ones) & ~flow & highs)) != 0U) {
+			break;
+		}
+		length += sizeof(word);
+	}
+	while ((length < cursor->input_count) &&
+	    !rx_needs_slow_path(data[length])) {
+		length += 1U;
+	}
+	return length;
+}
+
+static inline int
 rx(struct zmodem * zmodem,int timeout_ms)
 
 {
@@ -697,42 +802,73 @@ rx_32_data(struct zmodem * restrict zmodem,uint8_t * restrict p,
 
 {
 	int c;
+	size_t limit = capacity < ZMAXSPLEN ? capacity : ZMAXSPLEN;
+	size_t used = *l;
 	uint32_t rxd_crc;
 	uint32_t crc;
 	int sub_frame_type;
 	bool overflow = false;
+	struct rx_cursor cursor;
 
 	crc = UINT32_MAX;
+	load_rx_cursor(zmodem,&cursor);
 
-	do {
-		c = rx_raw(zmodem,1000);
-		if ((c >= 0) && rx_needs_slow_path(c)) {
-			c = rx_slow(zmodem,1000,c);
+	for (;;) {
+		size_t span = rx_plain_span(zmodem,&cursor);
+
+		if (span > 0U) {
+			const uint8_t * source =
+			    &zmodem->input_buffer[cursor.input_index];
+			size_t copied = span;
+
+			cursor.input_index += span;
+			cursor.input_count -= span;
+			cursor.cancel_count = 0U;
+			if (copied > limit - used) {
+				copied = limit - used;
+			}
+			(void)memcpy(&p[used],source,copied);
+			used += copied;
+			if (copied < span) {
+				if (!overflow) {
+					crc = crc32_update(crc,p,used);
+					overflow = true;
+				}
+				crc = crc32_update(crc,&source[copied],
+				    span - copied);
+			}
+			continue;
 		}
+		c = rx_cursor(zmodem,1000,&cursor);
 
 		if (c < 0) {
+			store_rx_cursor(zmodem,&cursor);
+			*l = used;
 			return c;
 		}
 		if (c < 0x100) {
-			if (*l < capacity && *l < ZMAXSPLEN) {
-				p[*l] = (uint8_t)c;
-				(*l)++;
+			if (used < limit) {
+				p[used] = (uint8_t)c;
+				used += 1U;
 			}
 			else {
 				if (!overflow) {
-					crc = crc32_update(crc,p,*l);
+					crc = crc32_update(crc,p,used);
 					overflow = true;
 				}
 				crc = crc32_byte_update(crc,(uint8_t)c);
 			}
 			continue;
 		}
-	} while (c < 0x100);
+		break;
+	}
+	store_rx_cursor(zmodem,&cursor);
+	*l = used;
 
 	sub_frame_type = c & 0xff;
 
 	if (!overflow) {
-		crc = crc32_update(crc,p,*l);
+		crc = crc32_update(crc,p,used);
 	}
 	crc = crc32_byte_update(crc,(uint8_t)sub_frame_type);
 
@@ -763,35 +899,73 @@ rx_16_data(struct zmodem * restrict zmodem,uint8_t * restrict p,
 {
 	int c;
 	int sub_frame_type;
+	size_t limit = capacity < ZMAXSPLEN ? capacity : ZMAXSPLEN;
+	size_t used = *l;
 	uint16_t crc;
 	uint16_t rxd_crc;
 	bool overflow = false;
+	struct rx_cursor cursor;
 
 	crc = 0;
+	load_rx_cursor(zmodem,&cursor);
 
-	do {
-		c = rx_raw(zmodem,5000);
-		if ((c >= 0) && rx_needs_slow_path(c)) {
-			c = rx_slow(zmodem,5000,c);
+	for (;;) {
+		size_t span = rx_plain_span(zmodem,&cursor);
+
+		if (span > 0U) {
+			const uint8_t * source =
+			    &zmodem->input_buffer[cursor.input_index];
+			size_t copied = span;
+
+			cursor.input_index += span;
+			cursor.input_count -= span;
+			cursor.cancel_count = 0U;
+			if (copied > limit - used) {
+				copied = limit - used;
+			}
+			(void)memcpy(&p[used],source,copied);
+			used += copied;
+			if (copied < span) {
+				if (!overflow) {
+					crc = crc16_buffer_update(crc,p,used);
+					overflow = true;
+				}
+				crc = crc16_buffer_update(crc,&source[copied],
+				    span - copied);
+			}
+			continue;
 		}
+		c = rx_cursor(zmodem,5000,&cursor);
 
 		if (c < 0) {
+			store_rx_cursor(zmodem,&cursor);
+			*l = used;
 			return c;
 		}
 		if (c < 0x100) {
-			crc = crc16_update(crc,(uint8_t)c);
-			if (*l < capacity && *l < ZMAXSPLEN) {
-				p[*l] = (uint8_t)c;
-				(*l)++;
+			if (used < limit) {
+				p[used] = (uint8_t)c;
+				used += 1U;
 			}
 			else {
+				if (!overflow) {
+					crc = crc16_buffer_update(crc,p,used);
+				}
+				crc = crc16_update(crc,(uint8_t)c);
 				overflow = true;
 			}
+			continue;
 		}
-	} while (c < 0x100);
+		break;
+	}
+	store_rx_cursor(zmodem,&cursor);
+	*l = used;
 
 	sub_frame_type = c & 0xff;
 
+	if (!overflow) {
+		crc = crc16_buffer_update(crc,p,used);
+	}
 	crc = crc16_update(crc,(uint8_t)sub_frame_type);
 
 	crc = crc16_update(crc,0U);

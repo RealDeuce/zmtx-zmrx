@@ -334,6 +334,8 @@ data_round_trip(bool use_crc32,bool escape_controls,uint8_t sent_frame_end,
 	uint8_t received[sizeof(payload)];
 	uint8_t frame_end;
 	size_t length;
+	unsigned prebuffered;
+	bool passed = true;
 
 	initialize(&sender,&sending_io);
 	sender.can_fcs_32 = use_crc32;
@@ -343,17 +345,29 @@ data_round_trip(bool use_crc32,bool escape_controls,uint8_t sent_frame_end,
 	    "transmit data packet")) {
 		return false;
 	}
-	initialize(&receiver,&receiving_io);
-	receiver.receive_32_bit_data = use_crc32;
-	(void)memcpy(receiving_io.input,sending_io.output,
-	    sending_io.output_length);
-	receiving_io.input_length = sending_io.output_length;
-	return expect(rx_data(&receiver,received,sizeof(received),&length,
-	    &frame_end) == expected_result,"receive data packet") &&
-	    expect(length == sizeof(payload),"data packet length") &&
-	    expect(frame_end == sent_frame_end,"data packet terminator") &&
-	    expect(memcmp(received,payload,sizeof(payload)) == 0,
-	    "data packet payload");
+	for (prebuffered = 0U;prebuffered < 2U;prebuffered++) {
+		size_t prefix = prebuffered != 0U ? 4U : 0U;
+
+		initialize(&receiver,&receiving_io);
+		receiver.receive_32_bit_data = use_crc32;
+		if (prefix > sending_io.output_length) {
+			prefix = sending_io.output_length;
+		}
+		(void)memcpy(receiver.input_buffer,sending_io.output,prefix);
+		receiver.input_count = prefix;
+		(void)memcpy(receiving_io.input,&sending_io.output[prefix],
+		    sending_io.output_length - prefix);
+		receiving_io.input_length = sending_io.output_length - prefix;
+		passed = expect(rx_data(&receiver,received,sizeof(received),&length,
+		    &frame_end) == expected_result,"receive data packet") && passed;
+		passed = expect(length == sizeof(payload),"data packet length") &&
+		    passed;
+		passed = expect(frame_end == sent_frame_end,
+		    "data packet terminator") && passed;
+		passed = expect(memcmp(received,payload,sizeof(payload)) == 0,
+		    "data packet payload") && passed;
+	}
+	return passed;
 }
 
 static bool
