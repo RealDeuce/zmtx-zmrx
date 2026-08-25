@@ -2,6 +2,9 @@
 /zmtx
 /zmrx
 /tests/test_crc
+/tests/test_posix_cleanup
 /tests/test_posix_io
 /tests/test_zmdm
+/tests/test_zmrx
+/tests/test_zmtx
 /tests/__pycache__/

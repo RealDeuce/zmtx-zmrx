@@ -21,6 +21,18 @@ make
 make check
 ```
 
+Optional end-to-end link tests exercise corruption recovery, asymmetric
+bandwidth, and interoperability with `lrzsz` when `lsz` and `lrz` are
+installed:
+
+```sh
+make check-link
+```
+
+Set `LSZ` or `LRZ` to select non-default `lrzsz` executables. The link tests
+use small temporary files and remove received files and partial transfers when
+each test finishes.
+
 The [implemented protocol state machines](docs/protocol-state-machine.md)
 show the sender and receiver control flow, including streaming acknowledgements,
 recovery, retries, and session cleanup.

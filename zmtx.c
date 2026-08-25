@@ -583,6 +583,7 @@ send_file(const char * name)
 {
 	unsigned attempts;
 	uint32_t pos;
+	uint32_t furthest_recovery_position;
 	uint32_t size;
 	struct stat s;
 	int file_fd;
@@ -795,8 +796,11 @@ send_file(const char * name)
 	transfer_clock_started =
 	    clock_gettime(CLOCK_MONOTONIC,&transfer_start) == 0;
 	pos = zmodem_header_position(protocol.rxd_header);
+	furthest_recovery_position = pos;
+	attempts = 0U;
 
-	for (attempts=0;attempts<MAX_RETRIES;attempts++) {
+	/* Only recovery requests without net progress consume the retry budget. */
+	while (attempts < MAX_RETRIES) {
 		unsigned finish_attempts;
 		bool resume = false;
 
@@ -812,15 +816,27 @@ send_file(const char * name)
 			return SEND_SKIPPED;
 		}
 		if (type == ZRPOS) {
-			pos = zmodem_header_position(protocol.rxd_header);
+			uint32_t requested =
+			    zmodem_header_position(protocol.rxd_header);
+
+			if (requested > furthest_recovery_position) {
+				furthest_recovery_position = requested;
+				attempts = 0U;
+			}
+			else {
+				attempts += 1U;
+			}
+			pos = requested;
 			reduce_subpacket_size();
 			continue;
 		}
 		if (type == ZNAK) {
+			attempts += 1U;
 			reduce_subpacket_size();
 			continue;
 		}
 		if (type == TIMEOUT) {
+			attempts += 1U;
 			reduce_subpacket_size();
 			continue;
 		}
@@ -850,7 +866,17 @@ send_file(const char * name)
 				return SEND_SUCCEEDED;
 			}
 			if (type == ZRPOS) {
-				pos = zmodem_header_position(protocol.rxd_header);
+				uint32_t requested =
+				    zmodem_header_position(protocol.rxd_header);
+
+				if (requested > furthest_recovery_position) {
+					furthest_recovery_position = requested;
+					attempts = 0U;
+				}
+				else {
+					attempts += 1U;
+				}
+				pos = requested;
 				resume = true;
 				break;
 			}

@@ -68,11 +68,28 @@ jobs:
       - name: Structural coverage
         run: make coverage
 
+  link:
+    name: Link recovery and interoperability
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v6
+
+      - name: Install lrzsz
+        run: sudo apt-get update && sudo apt-get install -y lrzsz
+
+      - name: Run link tests
+        env:
+          CFLAGS: -O2 -Wall -Wextra -Werror -pedantic-errors
+        run: make check-link
+
   release:
     name: Package source release
     if: startsWith(github.ref, 'refs/tags/')
     needs:
       - build
+      - link
       - quality
     runs-on: ubuntu-latest
     permissions:

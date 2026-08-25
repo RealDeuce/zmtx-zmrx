@@ -1543,6 +1543,45 @@ class ZmodemTests(unittest.TestCase):
                     process.kill()
                     process.wait()
 
+    def test_receiver_resets_error_limit_after_progress(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            process, peer = self.start_receiver(temporary)
+            try:
+                expected = bytes(range(11))
+                info = b"progress-errors.bin\0" + \
+                    f"{len(expected)} 0 0 0 1 0\0".encode()
+                peer.send(hex_header(ZFILE) + data_subpacket(info, ZCRCW))
+                frame_type, position, _ = peer.header()
+                self.assertEqual((frame_type, position), (ZRPOS, 0))
+
+                for value in expected:
+                    corrupt = bytearray(data_subpacket(b"bad", ZCRCE))
+                    corrupt[-1] ^= 1
+                    peer.send(hex_header(ZDATA, position) + corrupt)
+                    frame_type, retry_position, _ = peer.header()
+                    self.assertEqual(
+                        (frame_type, retry_position), (ZRPOS, position))
+
+                    payload = bytes((value,))
+                    peer.send(hex_header(ZDATA, position) +
+                              data_subpacket(payload, ZCRCE))
+                    position += len(payload)
+
+                peer.send(hex_header(ZEOF, position))
+                frame_type, _, _ = peer.header()
+                self.assertEqual(frame_type, ZRINIT)
+                self.assertEqual(
+                    (Path(temporary) / "progress-errors.bin").read_bytes(),
+                    expected)
+                returncode, stderr = finish_receiver(peer, process)
+                self.assertEqual(returncode, 0,
+                                 stderr.decode(errors="replace"))
+            finally:
+                peer.sock.close()
+                if process.poll() is None:
+                    process.kill()
+                    process.wait()
+
     def test_receiver_recovers_after_data_timeout(self):
         with tempfile.TemporaryDirectory() as temporary:
             process, peer = self.start_receiver(temporary)
@@ -2287,6 +2326,110 @@ class ZmodemTests(unittest.TestCase):
                     peer.send(hex_header(ZACK, offset))
 
                 self.finish_sender(peer, process, zrinit, len(payload))
+            finally:
+                peer.sock.close()
+                if process.poll() is None:
+                    process.kill()
+                    process.wait()
+
+    def test_sender_resets_error_limit_after_progress(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            payload = bytes(index & 0xFF for index in range(16384))
+            source = Path(temporary) / "progress-errors.bin"
+            source.write_bytes(payload)
+            process, peer, zrinit = self.start_sender(
+                temporary, source.name, "-s")
+            try:
+                position = 0
+                for _ in range(11):
+                    frame_type, header_position, _ = peer.header()
+                    self.assertEqual(
+                        (frame_type, header_position), (ZDATA, position))
+                    chunk, frame_end = peer.data()
+                    self.assertEqual(frame_end, ZCRCW)
+                    self.assertEqual(chunk, payload[position:
+                                                    position + len(chunk)])
+                    position += len(chunk)
+                    peer.send(hex_header(ZRPOS, position))
+
+                while position < len(payload):
+                    frame_type, header_position, _ = peer.header()
+                    self.assertEqual(
+                        (frame_type, header_position), (ZDATA, position))
+                    chunk, frame_end = peer.data()
+                    self.assertEqual(frame_end, ZCRCW)
+                    self.assertEqual(chunk, payload[position:
+                                                    position + len(chunk)])
+                    position += len(chunk)
+                    peer.send(hex_header(ZACK, position))
+
+                self.finish_sender(peer, process, zrinit, len(payload))
+            finally:
+                peer.sock.close()
+                if process.poll() is None:
+                    process.kill()
+                    process.wait()
+
+    def test_sender_stops_after_repositions_without_progress(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            payload = bytes(index & 0xFF for index in range(2048))
+            source = Path(temporary) / "stuck-errors.bin"
+            source.write_bytes(payload)
+            process, peer, _ = self.start_sender(
+                temporary, source.name, "-s")
+            try:
+                for _ in range(10):
+                    frame_type, position, _ = peer.header()
+                    self.assertEqual((frame_type, position), (ZDATA, 0))
+                    chunk, frame_end = peer.data()
+                    self.assertEqual(frame_end, ZCRCW)
+                    self.assertEqual(chunk, payload[:len(chunk)])
+                    peer.send(hex_header(ZRPOS, 0))
+
+                frame_type, _, _ = peer.header()
+                self.assertEqual(frame_type, ZFIN)
+                peer.send(hex_header(ZFIN))
+                self.assertEqual(bytes(peer.byte() for _ in range(2)), b"OO")
+                stderr = process.communicate(timeout=10)[1]
+                self.assertEqual(process.returncode, 4,
+                                 stderr.decode(errors="replace"))
+                self.assertIn(b"file transfer retries exhausted", stderr)
+            finally:
+                peer.sock.close()
+                if process.poll() is None:
+                    process.kill()
+                    process.wait()
+
+    def test_windowed_sender_crosses_signed_position_boundary(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            start = 0x7FFFF000
+            size = 0x80002000
+            source = Path(temporary) / "signed-boundary.bin"
+            try:
+                with source.open("wb") as output:
+                    output.truncate(size)
+            except OSError as error:
+                self.skipTest(f"sparse files are unavailable: {error}")
+
+            process, peer, zrinit = self.begin_sender(
+                temporary, source.name, "-w4K")
+            try:
+                peer.send(hex_header(ZRPOS, start))
+                frame_type, position, _ = peer.header()
+                self.assertEqual((frame_type, position), (ZDATA, start))
+
+                received = start
+                while received < size:
+                    chunk, frame_end = peer.data()
+                    self.assertEqual(chunk, bytes(len(chunk)))
+                    received += len(chunk)
+                    if frame_end in (ZCRCQ, ZCRCW):
+                        peer.send(hex_header(ZACK, received))
+                    else:
+                        self.assertEqual(frame_end, ZCRCG)
+
+                self.assertGreater(received, 0x80000000)
+                self.finish_sender(peer, process, zrinit, size)
             finally:
                 peer.sock.close()
                 if process.poll() is None:

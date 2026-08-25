@@ -33,6 +33,9 @@ check: all tests/test_crc tests/test_zmdm tests/test_zmtx tests/test_zmrx \
 check-install: all
 	MAKE='$(MAKE)' sh tests/test_install.sh
 
+check-link: all
+	$(PYTHON) tests/test_link.py
+
 check-static:
 	$(PYTHON) tests/run_quality.py static
 
@@ -114,5 +117,5 @@ clean:
 	rm -f *.o zmtx zmrx tests/test_crc tests/test_zmdm tests/test_zmtx \
 	    tests/test_zmrx tests/test_posix_io tests/test_posix_cleanup
 
-.PHONY: all check check-install check-static check-sanitize check-fuzz \
-	coverage quality install install-strip uninstall clean
+.PHONY: all check check-install check-link check-static check-sanitize \
+	check-fuzz coverage quality install install-strip uninstall clean
