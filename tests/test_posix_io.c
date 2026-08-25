@@ -333,6 +333,7 @@ test_interrupted_wait(void)
 	size_t count;
 	int descriptors[2];
 	int ready_pipe[2];
+	int start_pipe[2];
 	int read_result;
 	int wait_result;
 	ssize_t ready_result;
@@ -347,6 +348,13 @@ test_interrupted_wait(void)
 		(void)close(descriptors[1]);
 		return expect(false,"create interrupted-wait readiness pipe");
 	}
+	if (pipe(start_pipe) != 0) {
+		(void)close(descriptors[0]);
+		(void)close(descriptors[1]);
+		(void)close(ready_pipe[0]);
+		(void)close(ready_pipe[1]);
+		return expect(false,"create interrupted-wait start pipe");
+	}
 	(void)memset(&action,0,sizeof(action));
 	action.sa_handler = catch_signal;
 	if ((sigemptyset(&action.sa_mask) != 0) ||
@@ -355,19 +363,30 @@ test_interrupted_wait(void)
 		(void)close(descriptors[1]);
 		(void)close(ready_pipe[0]);
 		(void)close(ready_pipe[1]);
+		(void)close(start_pipe[0]);
+		(void)close(start_pipe[1]);
 		return expect(false,"install interrupted-wait handler");
 	}
 	child = fork();
 	if (child == 0) {
 		unsigned signal_index;
+		ssize_t start_result;
 
 		(void)close(ready_pipe[0]);
+		(void)close(start_pipe[1]);
 		ready = UINT8_C(1);
 		if (write(ready_pipe[1],&ready,sizeof(ready)) !=
 		    (ssize_t)sizeof(ready)) {
 			_exit(1);
 		}
 		(void)close(ready_pipe[1]);
+		do {
+			start_result = read(start_pipe[0],&ready,sizeof(ready));
+		} while ((start_result < 0) && (errno == EINTR));
+		(void)close(start_pipe[0]);
+		if (start_result != (ssize_t)sizeof(ready)) {
+			_exit(1);
+		}
 		for (signal_index=0U;signal_index<10U;signal_index++) {
 			(void)usleep(30000U);
 			if (kill(getppid(),SIGUSR1) != 0) {
@@ -382,9 +401,12 @@ test_interrupted_wait(void)
 		(void)close(descriptors[1]);
 		(void)close(ready_pipe[0]);
 		(void)close(ready_pipe[1]);
+		(void)close(start_pipe[0]);
+		(void)close(start_pipe[1]);
 		return expect(false,"fork interrupted-wait helper");
 	}
 	(void)close(ready_pipe[1]);
+	(void)close(start_pipe[0]);
 	do {
 		ready_result = read(ready_pipe[0],&ready,sizeof(ready));
 	} while ((ready_result < 0) && (errno == EINTR));
@@ -397,6 +419,11 @@ test_interrupted_wait(void)
 	caught_signals = 0;
 	passed = expect(clock_gettime(CLOCK_MONOTONIC,&started) == 0,
 	    "start interrupted-wait clock") && passed;
+	ready = UINT8_C(1);
+	passed = expect(write(start_pipe[1],&ready,sizeof(ready)) ==
+	    (ssize_t)sizeof(ready),"release interrupted-wait helper") && passed;
+	passed = expect(close(start_pipe[1]) == 0,
+	    "close interrupted-wait start pipe") && passed;
 	read_result = io.read(io.context,&byte,1U,&count,200);
 	passed = expect(clock_gettime(CLOCK_MONOTONIC,&finished) == 0,
 	    "stop interrupted-wait clock") && passed;
