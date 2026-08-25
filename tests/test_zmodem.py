@@ -616,6 +616,111 @@ class ZmodemTests(unittest.TestCase):
                         process.kill()
                         process.wait()
 
+    @unittest.skipIf(os.geteuid() == 0,
+                     "root can read files regardless of their mode")
+    def test_receiver_protects_write_only_existing_file(self):
+        cases = (("-p", 0), (None, ZF1_ZMPROT))
+        for option, management in cases:
+            with self.subTest(option=option, management=management), \
+                    tempfile.TemporaryDirectory() as temporary:
+                target = Path(temporary) / "protected.bin"
+                target.write_bytes(b"original")
+                target.chmod(0o222)
+                options = () if option is None else (option,)
+                process, peer = self.start_receiver(temporary, *options)
+                try:
+                    header = bytes((ZFILE, 0, 0, management, 0))
+                    info = b"protected.bin\0" + b"3 0 0 0 1 0\0"
+                    peer.send(hex_header(ZFILE, header=header) +
+                              data_subpacket(info, ZCRCW))
+                    frame_type, position, _ = peer.header()
+                    self.assertEqual((frame_type, position), (ZSKIP, 0))
+                    self.assertEqual(target.stat().st_size, len(b"original"))
+                    returncode, stderr = finish_receiver(peer, process)
+                    self.assertEqual(returncode, 0,
+                                     stderr.decode(errors="replace"))
+                finally:
+                    target.chmod(0o600)
+                    self.assertEqual(target.read_bytes(), b"original")
+                    peer.sock.close()
+                    if process.poll() is None:
+                        process.kill()
+                        process.wait()
+
+    def test_receiver_protect_creates_absent_file(self):
+        cases = (("-p", 0), (None, ZF1_ZMPROT))
+        for option, management in cases:
+            with self.subTest(option=option, management=management), \
+                    tempfile.TemporaryDirectory() as temporary:
+                target = Path(temporary) / "protected.bin"
+                options = () if option is None else (option,)
+                process, peer = self.start_receiver(temporary, *options)
+                try:
+                    header = bytes((ZFILE, 0, 0, management, 0))
+                    info = b"protected.bin\0" + b"3 0 0 0 1 0\0"
+                    peer.send(hex_header(ZFILE, header=header) +
+                              data_subpacket(info, ZCRCW))
+                    frame_type, position, _ = peer.header()
+                    self.assertEqual((frame_type, position), (ZRPOS, 0))
+                    peer.send(hex_header(ZDATA) +
+                              data_subpacket(b"new", ZCRCE))
+                    peer.send(hex_header(ZEOF, 3))
+                    frame_type, _, _ = peer.header()
+                    self.assertEqual(frame_type, ZRINIT)
+                    self.assertEqual(target.read_bytes(), b"new")
+                    returncode, stderr = finish_receiver(peer, process)
+                    self.assertEqual(returncode, 0,
+                                     stderr.decode(errors="replace"))
+                finally:
+                    peer.sock.close()
+                    if process.poll() is None:
+                        process.kill()
+                        process.wait()
+
+    def test_receiver_protect_reports_exclusive_create_failure(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            process, peer = self.start_receiver(temporary, "-p")
+            try:
+                info = b"missing/protected.bin\0" + b"3 0 0 0 1 0\0"
+                peer.send(hex_header(ZFILE) + data_subpacket(info, ZCRCW))
+                frame_type, position, _ = peer.header()
+                self.assertEqual((frame_type, position), (ZFERR, 0))
+                frame_type, _, _ = peer.header()
+                self.assertEqual(frame_type, ZFIN)
+                peer.send(b"OO")
+                stderr = process.communicate(timeout=10)[1]
+                self.assertEqual(process.returncode, 4,
+                                 stderr.decode(errors="replace"))
+            finally:
+                peer.sock.close()
+                if process.poll() is None:
+                    process.kill()
+                    process.wait()
+
+    def test_receiver_reports_destination_inspection_failure(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            parent = Path(temporary) / "not-a-directory"
+            parent.write_bytes(b"original")
+            process, peer = self.start_receiver(temporary, "-p")
+            try:
+                info = b"not-a-directory/protected.bin\0" + \
+                       b"3 0 0 0 1 0\0"
+                peer.send(hex_header(ZFILE) + data_subpacket(info, ZCRCW))
+                frame_type, position, _ = peer.header()
+                self.assertEqual((frame_type, position), (ZFERR, 0))
+                self.assertEqual(parent.read_bytes(), b"original")
+                frame_type, _, _ = peer.header()
+                self.assertEqual(frame_type, ZFIN)
+                peer.send(b"OO")
+                stderr = process.communicate(timeout=10)[1]
+                self.assertEqual(process.returncode, 4,
+                                 stderr.decode(errors="replace"))
+            finally:
+                peer.sock.close()
+                if process.poll() is None:
+                    process.kill()
+                    process.wait()
+
     def test_receiver_clobber_management(self):
         cases = (("-o", 0), (None, ZF1_ZMCLOB))
         for option, management in cases:

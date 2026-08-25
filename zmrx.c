@@ -372,16 +372,18 @@ receive_file(void)
 	uintmax_t parsed_size;
 	struct stat s;
 	FILE * received_file;
+	int received_fd = -1;
 	int type;
 	size_t l;
 	size_t filename_length;
 	bool clobber = false;
 	bool protect = false;
 	bool newer = false;
-	bool exists;
+	bool exists = false;
+	bool create_exclusively = false;
 	uint8_t management;
 	struct utimbuf tv;
-	char * mode = "wb";
+	const char * mode = "wb";
 	char * file_info = (char *)rx_data_subpacket;
 	char * metadata;
 	char * size_field;
@@ -543,16 +545,17 @@ receive_file(void)
 	 * decide whether to transfer the file or skip it
 	 */
 
-	fp = fopen(name,"rb");
-
-	if (fp != NULL) {
-		exists = fstat(fileno(fp),&s) == 0;
-
-		(void)fclose(fp);
-		fp = NULL;
+	if (stat(name,&s) == 0) {
+		exists = true;
 	}
 	else {
-		exists = false;
+		if (errno != ENOENT) {
+			(void)tx_pos_header(&protocol,ZFERR,UINT32_C(0));
+			if (opt_v) {
+				(void)fprintf(stderr,"zmrx: can't inspect file %s\n",name);
+			}
+			return RECEIVE_FAILED;
+		}
 	}
 
 	/*
@@ -621,6 +624,9 @@ receive_file(void)
 			}
 		}
 	}
+	if (!exists) {
+		create_exclusively = protect;
+	}
 
 	/*
  	 * transfer the file
@@ -628,7 +634,24 @@ receive_file(void)
 	 * (no options->clobber anyway)
 	 */
 
-	received_file = fopen(name,mode);
+	if (create_exclusively) {
+		received_fd = open(name,O_WRONLY | O_CREAT | O_EXCL,(mode_t)0666);
+		if (received_fd >= 0) {
+			received_file = fdopen(received_fd,mode);
+			if (received_file == NULL) {
+				int fdopen_error = errno;
+
+				(void)close(received_fd);
+				errno = fdopen_error;
+			}
+		}
+		else {
+			received_file = NULL;
+		}
+	}
+	else {
+		received_file = fopen(name,mode);
+	}
 	fp = received_file;
 
 	if (received_file == NULL) {
