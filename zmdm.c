@@ -613,6 +613,25 @@ rx_cursor_byte(struct zmodem * restrict zmodem,int timeout_ms,
 	return c;
 }
 
+static inline int
+rx_cursor_raw(struct zmodem * restrict zmodem,int timeout_ms,
+    struct rx_cursor * restrict cursor)
+
+{
+	int result = rx_cursor_byte(zmodem,timeout_ms,cursor);
+
+	if (result == CAN) {
+		cursor->cancel_count += 1U;
+		if (cursor->cancel_count == 5U) {
+			result = ZMODEM_CANCELLED;
+		}
+	}
+	else if (result >= 0) {
+		cursor->cancel_count = 0U;
+	}
+	return result;
+}
+
 int
 rx_raw(struct zmodem * zmodem,int timeout_ms)
 
@@ -621,16 +640,7 @@ rx_raw(struct zmodem * zmodem,int timeout_ms)
 	int result;
 
 	load_rx_cursor(zmodem,&cursor);
-	result = rx_cursor_byte(zmodem,timeout_ms,&cursor);
-	if (result == CAN) {
-		cursor.cancel_count += 1U;
-		if (cursor.cancel_count == 5U) {
-			result = ZMODEM_CANCELLED;
-		}
-	}
-	else if (result >= 0) {
-		cursor.cancel_count = 0U;
-	}
+	result = rx_cursor_raw(zmodem,timeout_ms,&cursor);
 	store_rx_cursor(zmodem,&cursor);
 	return result;
 }
@@ -656,11 +666,12 @@ rx_needs_slow_path(int c)
 }
 
 static int
-rx_slow(struct zmodem * zmodem,int timeout_ms,int c)
+rx_cursor_slow(struct zmodem * restrict zmodem,int timeout_ms,int c,
+    struct rx_cursor * restrict cursor)
 {
 	for (;;) {
 		while (rx_is_flow_control(c)) {
-			c = rx_raw(zmodem,timeout_ms);
+			c = rx_cursor_raw(zmodem,timeout_ms,cursor);
 			if (c < 0) {
 				return c;
 			}
@@ -674,7 +685,7 @@ rx_slow(struct zmodem * zmodem,int timeout_ms,int c)
 		 * (or something illegal; then back to the top)
 		 */
 		for (;;) {
-			c = rx_raw(zmodem,timeout_ms);
+			c = rx_cursor_raw(zmodem,timeout_ms,cursor);
 			if (c < 0) {
 				return c;
 			}
@@ -721,11 +732,23 @@ rx_slow(struct zmodem * zmodem,int timeout_ms,int c)
 			}
 			break;
 		}
-		c = rx_raw(zmodem,timeout_ms);
+		c = rx_cursor_raw(zmodem,timeout_ms,cursor);
 		if (c < 0) {
 			return c;
 		}
 	}
+}
+
+static int
+rx_slow(struct zmodem * zmodem,int timeout_ms,int c)
+
+{
+	struct rx_cursor cursor;
+
+	load_rx_cursor(zmodem,&cursor);
+	c = rx_cursor_slow(zmodem,timeout_ms,c,&cursor);
+	store_rx_cursor(zmodem,&cursor);
+	return c;
 }
 
 static inline int
@@ -733,27 +756,15 @@ rx_cursor(struct zmodem * restrict zmodem,int timeout_ms,
     struct rx_cursor * restrict cursor)
 
 {
-	int c = rx_cursor_byte(zmodem,timeout_ms,cursor);
+	int c = rx_cursor_raw(zmodem,timeout_ms,cursor);
 
 	if (c < 0) {
 		return c;
 	}
-	if (c == CAN) {
-		cursor->cancel_count += 1U;
-		if (cursor->cancel_count == 5U) {
-			return ZMODEM_CANCELLED;
-		}
+	if (!rx_needs_slow_path(c)) {
+		return c;
 	}
-	else {
-		cursor->cancel_count = 0U;
-		if (!rx_is_flow_control(c)) {
-			return c;
-		}
-	}
-	store_rx_cursor(zmodem,cursor);
-	c = rx_slow(zmodem,timeout_ms,c);
-	load_rx_cursor(zmodem,cursor);
-	return c;
+	return rx_cursor_slow(zmodem,timeout_ms,c,cursor);
 }
 
 static inline size_t
