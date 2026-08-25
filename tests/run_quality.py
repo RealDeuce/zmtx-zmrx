@@ -133,6 +133,9 @@ def build_instrumented(directory, flags):
     compile_program(clang, directory / "test_zmdm",
                     ["tests/test_zmdm.c", "zmdm.c", "crctab.c"],
                     [*diagnostics, *flags])
+    compile_program(clang, directory / "test_zmtx",
+                    ["tests/test_zmtx.c", *common_sources],
+                    [*diagnostics, *flags])
     compile_program(clang, directory / "test_posix_io",
                     ["tests/test_posix_io.c", "zmdm_posix.c"],
                     [*diagnostics, *flags])
@@ -141,6 +144,7 @@ def build_instrumented(directory, flags):
 def run_tests(directory, environment):
     run([directory / "test_crc"], env=environment)
     run([directory / "test_zmdm"], env=environment)
+    run([directory / "test_zmtx"], env=environment)
     run([directory / "test_posix_io"], env=environment)
     test_environment = environment.copy()
     test_environment["ZMTX"] = str(directory / "zmtx")
@@ -198,6 +202,7 @@ def coverage(directory):
         "-object", directory / "zmrx",
         "-object", directory / "test_crc",
         "-object", directory / "test_zmdm",
+        "-object", directory / "test_zmtx",
         "-object", directory / "test_posix_io",
     ]
     run([llvm_cov, "report", *objects, f"-instr-profile={profile}",

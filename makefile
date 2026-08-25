@@ -20,9 +20,10 @@ PYTHON ?= python3
 
 all:	zmtx zmrx
 
-check: all tests/test_crc tests/test_zmdm tests/test_posix_io
+check: all tests/test_crc tests/test_zmdm tests/test_zmtx tests/test_posix_io
 	./tests/test_crc
 	./tests/test_zmdm
+	./tests/test_zmtx
 	./tests/test_posix_io
 	$(PYTHON) tests/test_zmodem.py
 
@@ -52,6 +53,12 @@ tests/test_zmdm: tests/test_zmdm.c zmdm.o crctab.o zmdm.h zmodem.h crctab.h
 	$(CC) $(CPPFLAGS) $(CFLAGS) -I. \
 	    tests/test_zmdm.c zmdm.o crctab.o $(LDFLAGS) $(LDLIBS) $(LIBS) \
 	    -o tests/test_zmdm
+
+tests/test_zmtx: tests/test_zmtx.c zmtx.c version.h zmdm.o zmdm_posix.o \
+	    crctab.o zmdm.h zmdm_posix.h zmodem.h crctab.h
+	$(CC) $(CPPFLAGS) $(CFLAGS) -I. \
+	    tests/test_zmtx.c zmdm.o zmdm_posix.o crctab.o \
+	    $(LDFLAGS) $(LDLIBS) $(LIBS) -o tests/test_zmtx
 
 tests/test_posix_io: tests/test_posix_io.c zmdm_posix.o zmdm_posix.h zmdm.h
 	$(CC) $(CPPFLAGS) $(CFLAGS) -I. \
@@ -90,7 +97,8 @@ uninstall:
 	    "$(DESTDIR)$(MANDIR)/man1/zmrx.1"
 
 clean:
-	rm -f *.o zmtx zmrx tests/test_crc tests/test_zmdm tests/test_posix_io
+	rm -f *.o zmtx zmrx tests/test_crc tests/test_zmdm tests/test_zmtx \
+	    tests/test_posix_io
 
 .PHONY: all check check-install check-static check-sanitize check-fuzz \
 	coverage quality install install-strip uninstall clean

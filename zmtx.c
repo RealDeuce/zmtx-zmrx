@@ -474,10 +474,21 @@ send_from(const char * name,int file_fd)
 		 * check out that header
 		 */
 
-		while (rx_poll(&protocol) > 0) {
+		for (;;) {
 			int type;
 			int c;
+			int ready = rx_poll(&protocol);
+
+			if (ready < 0) {
+				return ready;
+			}
+			if (ready == 0) {
+				break;
+			}
 			c = rx_raw(&protocol,1000);
+			if (c < 0) {
+				return c;
+			}
 			if ((c & 0x7f) == ZPAD) {
 				type = rx_header(&protocol,1000);
 				if (type == ZACK) {
