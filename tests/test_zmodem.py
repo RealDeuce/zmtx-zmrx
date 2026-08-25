@@ -850,6 +850,21 @@ class ZmodemTests(unittest.TestCase):
                     process.kill()
                     process.wait()
 
+    def test_receiver_stops_on_initial_cancellation(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            process, peer = self.start_receiver(temporary)
+            try:
+                peer.send(bytes((ZDLE,)) * 5)
+                stderr = process.communicate(timeout=10)[1]
+                self.assertEqual(process.returncode, 3,
+                                 stderr.decode(errors="replace"))
+                self.assertIn(b"input error establishing contact", stderr)
+            finally:
+                peer.sock.close()
+                if process.poll() is None:
+                    process.kill()
+                    process.wait()
+
     def test_receiver_retries_invitation_after_timeout(self):
         with tempfile.TemporaryDirectory() as temporary:
             process, peer = self.start_receiver(temporary)
@@ -865,6 +880,23 @@ class ZmodemTests(unittest.TestCase):
                     self.assertEqual(frame_type, ZRINIT)
                 returncode, stderr = finish_receiver(peer, process)
                 self.assertEqual(returncode, 0,
+                                 stderr.decode(errors="replace"))
+            finally:
+                peer.sock.close()
+                if process.poll() is None:
+                    process.kill()
+                    process.wait()
+
+    def test_receiver_stops_on_file_info_cancellation(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            process, peer = self.start_receiver(temporary)
+            try:
+                peer.send(hex_header(ZFILE) + bytes((ZDLE,)) * 5)
+                frame_type, _, _ = peer.header()
+                self.assertEqual(frame_type, ZFIN)
+                peer.send(b"OO")
+                stderr = process.communicate(timeout=10)[1]
+                self.assertEqual(process.returncode, 4,
                                  stderr.decode(errors="replace"))
             finally:
                 peer.sock.close()
@@ -916,6 +948,23 @@ class ZmodemTests(unittest.TestCase):
                     if process.poll() is None:
                         process.kill()
                         process.wait()
+
+    def test_receiver_stops_on_over_and_out_cancellation(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            process, peer = self.start_receiver(temporary)
+            try:
+                peer.send(hex_header(ZFIN))
+                frame_type, _, _ = peer.header()
+                self.assertEqual(frame_type, ZFIN)
+                peer.send(bytes((ZDLE,)) * 5)
+                stderr = process.communicate(timeout=0.75)[1]
+                self.assertEqual(process.returncode, 4,
+                                 stderr.decode(errors="replace"))
+            finally:
+                peer.sock.close()
+                if process.poll() is None:
+                    process.kill()
+                    process.wait()
 
     def test_sender_waits_for_each_non_streaming_ack(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -1356,6 +1405,33 @@ class ZmodemTests(unittest.TestCase):
                 if process.poll() is None:
                     process.kill()
                     process.wait()
+
+    def test_receiver_stops_on_file_data_cancellation(self):
+        for cancelled_frame in (ZDATA, ZFILE):
+            with self.subTest(cancelled_frame=cancelled_frame), \
+                    tempfile.TemporaryDirectory() as temporary:
+                process, peer = self.start_receiver(temporary)
+                try:
+                    info = b"cancelled.bin\0" + b"1 0 0 0 1 0\0"
+                    peer.send(hex_header(ZFILE) +
+                              data_subpacket(info, ZCRCW))
+                    frame_type, position, _ = peer.header()
+                    self.assertEqual((frame_type, position), (ZRPOS, 0))
+                    peer.send(hex_header(cancelled_frame) +
+                              bytes((ZDLE,)) * 5)
+                    frame_type, position, _ = peer.header()
+                    self.assertEqual((frame_type, position), (ZFERR, 0))
+                    frame_type, _, _ = peer.header()
+                    self.assertEqual(frame_type, ZFIN)
+                    peer.send(b"OO")
+                    stderr = process.communicate(timeout=10)[1]
+                    self.assertEqual(process.returncode, 4,
+                                     stderr.decode(errors="replace"))
+                finally:
+                    peer.sock.close()
+                    if process.poll() is None:
+                        process.kill()
+                        process.wait()
 
     def test_receiver_stops_after_repeated_bad_positions(self):
         with tempfile.TemporaryDirectory() as temporary:

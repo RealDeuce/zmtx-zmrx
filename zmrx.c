@@ -163,6 +163,13 @@ file_position(FILE * file,uint32_t * position)
 	return true;
 }
 
+static bool
+terminal_receive_result(int result)
+
+{
+	return result <= ZMODEM_CANCELLED;
+}
+
 /*
  * receive a header and check for garbage
  */
@@ -210,8 +217,12 @@ receive_file_data(char * name,FILE * fp)
 			continue;
 		}
 		if (type == ZFILE) {
-			(void)rx_data(&protocol,rx_data_subpacket,
+			int data_result = rx_data(&protocol,rx_data_subpacket,
 			    sizeof(rx_data_subpacket),&n,&frame_end);
+
+			if (terminal_receive_result(data_result)) {
+				return data_result;
+			}
 			if (tx_pos_header(&protocol,ZRPOS,pos) != 0) {
 				return ZFERR;
 			}
@@ -240,6 +251,9 @@ receive_file_data(char * name,FILE * fp)
 
 			type = rx_data(&protocol,rx_data_subpacket,
 			    sizeof(rx_data_subpacket),&n,&frame_end);
+			if (terminal_receive_result(type)) {
+				return type;
+			}
 			if (type != FRAMEOK) {
 				if (type != ENDOFFRAME) {
 					if (rx_purge(&protocol) != ZMODEM_OK) {
@@ -446,6 +460,9 @@ receive_file(void)
 	type = rx_data(&protocol,rx_data_subpacket,sizeof(rx_data_subpacket),&l,
 	    &frame_end);
 
+	if (terminal_receive_result(type)) {
+		return RECEIVE_FAILED;
+	}
 	if (type != ENDOFFRAME) {
 		if (type != TIMEOUT) {
 			(void)tx_znak(&protocol);
@@ -905,6 +922,11 @@ main(int argc,char ** argv)
 		}
 		type = rx_header(&protocol,7000);
 	} while (type == TIMEOUT || type == ZRQINIT);
+	if (type < 0) {
+		(void)fprintf(stderr,"zmrx: input error establishing contact\n");
+		cleanup();
+		return 3;
+	}
 
 	if (opt_v) {
 		(void)fprintf(stderr,"zmrx: contact established\n");
@@ -921,6 +943,10 @@ main(int argc,char ** argv)
 		unsigned attempts;
 
 		if (transfer_failed) {
+			break;
+		}
+		if (type < 0) {
+			transfer_failed = true;
 			break;
 		}
 
@@ -982,14 +1008,14 @@ main(int argc,char ** argv)
 		int c;
 		do {
 			c = rx_raw(&protocol,1000);
-		} while (c != 'O' && c != TIMEOUT);
+		} while (c >= 0 && c != 'O');
 
-		if (c != TIMEOUT) {
+		if (c == 'O') {
 			do {
 				c = rx_raw(&protocol,1000);
-			} while (c != 'O' && c != TIMEOUT);
+			} while (c >= 0 && c != 'O');
 		}
-		if (c == TIMEOUT) {
+		if (c != 'O') {
 			transfer_failed = true;
 		}
 	}
