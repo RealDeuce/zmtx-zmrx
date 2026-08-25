@@ -50,6 +50,9 @@
 #ifndef ZMODEM_POSIX_CLOCK_GETTIME
 #define ZMODEM_POSIX_CLOCK_GETTIME clock_gettime
 #endif
+#ifndef ZMODEM_POSIX_SELECT
+#define ZMODEM_POSIX_SELECT select
+#endif
 #ifndef ZMODEM_POSIX_TCSETATTR
 #define ZMODEM_POSIX_TCSETATTR tcsetattr
 #endif
@@ -137,7 +140,7 @@ wait_for_input(int fd,int timeout_ms)
 		}
 		FD_ZERO(&read_set);
 		FD_SET(fd,&read_set);
-		result = select(fd + 1,&read_set,NULL,NULL,&timeout);
+		result = ZMODEM_POSIX_SELECT(fd + 1,&read_set,NULL,NULL,&timeout);
 		if (result >= 0) {
 			break;
 		}

@@ -3,21 +3,15 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
-#include <errno.h>
 #include <fcntl.h>
-#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/select.h>
-#include <sys/wait.h>
-#include <time.h>
 #include <unistd.h>
 
 #include "zmdm.h"
 #include "zmdm_posix.h"
-
-static volatile sig_atomic_t caught_signals;
 
 static bool
 expect(bool condition,const char * description)
@@ -26,22 +20,6 @@ expect(bool condition,const char * description)
 		(void)fprintf(stderr,"test_posix_io: %s\n",description);
 	}
 	return condition;
-}
-
-static void
-catch_signal(int signal_number)
-{
-	(void)signal_number;
-	caught_signals += 1;
-}
-
-static int64_t
-elapsed_milliseconds(const struct timespec * start,const struct timespec * end)
-{
-	return ((int64_t)end->tv_sec * INT64_C(1000) +
-	    (int64_t)end->tv_nsec / INT64_C(1000000)) -
-	    ((int64_t)start->tv_sec * INT64_C(1000) +
-	    (int64_t)start->tv_nsec / INT64_C(1000000));
 }
 
 static bool
@@ -319,136 +297,6 @@ test_directory_read_failures(void)
 	return passed;
 }
 
-static bool
-test_interrupted_wait(void)
-{
-	struct zmodem_posix_io posix_io;
-	struct zmodem_io io;
-	struct sigaction action;
-	struct sigaction previous;
-	struct timespec started = { 0,0 };
-	struct timespec finished = { 0,0 };
-	uint8_t byte;
-	uint8_t ready;
-	size_t count;
-	int descriptors[2];
-	int ready_pipe[2];
-	int start_pipe[2];
-	int read_result;
-	int wait_result;
-	ssize_t ready_result;
-	pid_t child;
-	bool passed = true;
-
-	if (pipe(descriptors) != 0) {
-		return expect(false,"create interrupted-wait pipe");
-	}
-	if (pipe(ready_pipe) != 0) {
-		(void)close(descriptors[0]);
-		(void)close(descriptors[1]);
-		return expect(false,"create interrupted-wait readiness pipe");
-	}
-	if (pipe(start_pipe) != 0) {
-		(void)close(descriptors[0]);
-		(void)close(descriptors[1]);
-		(void)close(ready_pipe[0]);
-		(void)close(ready_pipe[1]);
-		return expect(false,"create interrupted-wait start pipe");
-	}
-	(void)memset(&action,0,sizeof(action));
-	action.sa_handler = catch_signal;
-	if ((sigemptyset(&action.sa_mask) != 0) ||
-	    (sigaction(SIGUSR1,&action,&previous) != 0)) {
-		(void)close(descriptors[0]);
-		(void)close(descriptors[1]);
-		(void)close(ready_pipe[0]);
-		(void)close(ready_pipe[1]);
-		(void)close(start_pipe[0]);
-		(void)close(start_pipe[1]);
-		return expect(false,"install interrupted-wait handler");
-	}
-	child = fork();
-	if (child == 0) {
-		unsigned signal_index;
-		ssize_t start_result;
-
-		(void)close(ready_pipe[0]);
-		(void)close(start_pipe[1]);
-		ready = UINT8_C(1);
-		if (write(ready_pipe[1],&ready,sizeof(ready)) !=
-		    (ssize_t)sizeof(ready)) {
-			_exit(1);
-		}
-		(void)close(ready_pipe[1]);
-		do {
-			start_result = read(start_pipe[0],&ready,sizeof(ready));
-		} while ((start_result < 0) && (errno == EINTR));
-		(void)close(start_pipe[0]);
-		if (start_result != (ssize_t)sizeof(ready)) {
-			_exit(1);
-		}
-		for (signal_index=0U;signal_index<10U;signal_index++) {
-			(void)usleep(30000U);
-			if (kill(getppid(),SIGUSR1) != 0) {
-				break;
-			}
-		}
-		_exit(0);
-	}
-	if (child < 0) {
-		(void)sigaction(SIGUSR1,&previous,NULL);
-		(void)close(descriptors[0]);
-		(void)close(descriptors[1]);
-		(void)close(ready_pipe[0]);
-		(void)close(ready_pipe[1]);
-		(void)close(start_pipe[0]);
-		(void)close(start_pipe[1]);
-		return expect(false,"fork interrupted-wait helper");
-	}
-	(void)close(ready_pipe[1]);
-	(void)close(start_pipe[0]);
-	do {
-		ready_result = read(ready_pipe[0],&ready,sizeof(ready));
-	} while ((ready_result < 0) && (errno == EINTR));
-	passed = expect(ready_result == (ssize_t)sizeof(ready),
-	    "start interrupted-wait helper") && passed;
-	passed = expect(close(ready_pipe[0]) == 0,
-	    "close interrupted-wait readiness pipe") && passed;
-	zmodem_posix_io_init(&posix_io,descriptors[0],descriptors[1]);
-	zmodem_posix_io_bind(&io,&posix_io);
-	caught_signals = 0;
-	passed = expect(clock_gettime(CLOCK_MONOTONIC,&started) == 0,
-	    "start interrupted-wait clock") && passed;
-	ready = UINT8_C(1);
-	passed = expect(write(start_pipe[1],&ready,sizeof(ready)) ==
-	    (ssize_t)sizeof(ready),"release interrupted-wait helper") && passed;
-	passed = expect(close(start_pipe[1]) == 0,
-	    "close interrupted-wait start pipe") && passed;
-	read_result = io.read(io.context,&byte,1U,&count,200);
-	passed = expect(clock_gettime(CLOCK_MONOTONIC,&finished) == 0,
-	    "stop interrupted-wait clock") && passed;
-	passed = expect(read_result == ZMODEM_TIMEOUT,
-	    "retry interrupted select to original deadline") && passed;
-	passed = expect(caught_signals >= 3,
-	    "deliver repeated signals during wait") && passed;
-	passed = expect(elapsed_milliseconds(&started,&finished) >= INT64_C(150),
-	    "interrupted wait does not expire early") && passed;
-	passed = expect(elapsed_milliseconds(&started,&finished) < INT64_C(350),
-	    "interruptions do not restart timeout") && passed;
-	do {
-		wait_result = waitpid(child,NULL,0);
-	} while ((wait_result < 0) && (errno == EINTR));
-	passed = expect(wait_result == child,
-	    "wait for interrupted-wait helper") && passed;
-	passed = expect(sigaction(SIGUSR1,&previous,NULL) == 0,
-	    "restore interrupted-wait handler") && passed;
-	passed = expect(close(descriptors[0]) == 0,
-	    "close interrupted-wait reader") && passed;
-	passed = expect(close(descriptors[1]) == 0,
-	    "close interrupted-wait writer") && passed;
-	return passed;
-}
-
 int
 main(void)
 {
@@ -461,7 +309,6 @@ main(void)
 	passed = test_owned_descriptor() && passed;
 	passed = test_terminal_transport() && passed;
 	passed = test_directory_read_failures() && passed;
-	passed = test_interrupted_wait() && passed;
 	passed = expect(zmodem_posix_ignore_sigpipe() == 0,
 	    "ignore broken-pipe signal") && passed;
 	return passed ? 0 : 1;

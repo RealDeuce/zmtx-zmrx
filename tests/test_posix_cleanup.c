@@ -21,12 +21,15 @@ static int wrapped_tcsetattr(int, int, const struct termios *);
 static ssize_t wrapped_write(int, const void *, size_t);
 static int wrapped_close(int);
 static int wrapped_clock_gettime(clockid_t, struct timespec *);
+static int wrapped_select(int, fd_set *, fd_set *, fd_set *, struct timeval *);
 
 #define ZMODEM_POSIX_TCSETATTR wrapped_tcsetattr
 #define ZMODEM_POSIX_WRITE wrapped_write
 #define ZMODEM_POSIX_CLOSE wrapped_close
 #define ZMODEM_POSIX_CLOCK_GETTIME wrapped_clock_gettime
+#define ZMODEM_POSIX_SELECT wrapped_select
 #include "../zmdm_posix.c"
+#undef ZMODEM_POSIX_SELECT
 #undef ZMODEM_POSIX_CLOCK_GETTIME
 #undef ZMODEM_POSIX_CLOSE
 #undef ZMODEM_POSIX_WRITE
@@ -42,6 +45,10 @@ static int close_calls;
 static bool use_fake_clock;
 static int clock_gettime_failures;
 static struct timespec fake_clock_value;
+static bool use_fake_select;
+static int fake_select_interruptions;
+static int fake_select_calls;
+static struct timeval fake_select_timeouts[4];
 
 static int
 wrapped_clock_gettime(clockid_t clock_id,struct timespec * value)
@@ -56,6 +63,32 @@ wrapped_clock_gettime(clockid_t clock_id,struct timespec * value)
 		return 0;
 	}
 	return clock_gettime(clock_id,value);
+}
+
+static int
+wrapped_select(int descriptor_count,fd_set * read_descriptors,
+    fd_set * write_descriptors,fd_set * error_descriptors,
+    struct timeval * timeout)
+{
+	if (use_fake_select) {
+		if (fake_select_calls < 4) {
+			fake_select_timeouts[fake_select_calls] = *timeout;
+		}
+		fake_select_calls += 1;
+		fake_clock_value.tv_nsec += 50000000L;
+		if (fake_clock_value.tv_nsec >= 1000000000L) {
+			fake_clock_value.tv_sec += (time_t)1;
+			fake_clock_value.tv_nsec -= 1000000000L;
+		}
+		if (fake_select_interruptions > 0) {
+			fake_select_interruptions -= 1;
+			errno = EINTR;
+			return -1;
+		}
+		return 0;
+	}
+	return select(descriptor_count,read_descriptors,write_descriptors,
+	    error_descriptors,timeout);
 }
 
 static int
@@ -310,6 +343,27 @@ test_input_deadlines(void)
 	clock_gettime_failures = 1;
 	passed = expect_cleanup(wait_for_input(STDIN_FILENO,200) == ZMODEM_IO_ERROR,
 	    "propagate wait clock failure") && passed;
+	fake_clock_value.tv_sec = (time_t)10;
+	fake_clock_value.tv_nsec = 0L;
+	fake_select_interruptions = 4;
+	fake_select_calls = 0;
+	use_fake_select = true;
+	clock_gettime_failures = 0;
+	passed = expect_cleanup(wait_for_input(STDIN_FILENO,200) == 0,
+	    "expire interrupted wait at original deadline") && passed;
+	passed = expect_cleanup(fake_select_calls == 4,
+	    "retry each interrupted select") && passed;
+	passed = expect_cleanup(fake_select_timeouts[0].tv_sec == (time_t)0,
+	    "start interrupted select within current second") && passed;
+	passed = expect_cleanup(
+	    fake_select_timeouts[0].tv_usec == (suseconds_t)200000,
+	    "start interrupted select with full timeout") && passed;
+	passed = expect_cleanup(fake_select_timeouts[3].tv_sec == (time_t)0,
+	    "finish interrupted select within current second") && passed;
+	passed = expect_cleanup(
+	    fake_select_timeouts[3].tv_usec == (suseconds_t)50000,
+	    "reduce timeout after repeated interruptions") && passed;
+	use_fake_select = false;
 	use_fake_clock = false;
 	clock_gettime_failures = 0;
 	return passed;
