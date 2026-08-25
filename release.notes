@@ -25,6 +25,25 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 Special thanks to Jacques Mattheij, formerly of Mattheij Computer Service,
 and original author of zmtx/zmrx.
 
+2.04 release notes (25/08/26)
+
+Sender recovery no longer exhausts its retry allowance merely because a long
+transfer encounters more than ten separate errors. An advancing ZRPOS now
+resets the retry budget, while repeated or stale recovery requests remain
+bounded. This permits sustained progress across independently corrupted parts
+of a transfer without allowing an unresponsive peer to retry forever.
+
+Receive-side escape decoding now keeps its input cursor local while handling
+flow control, cancellation and escaped bytes. This removes redundant state
+synchronization from the slow path without changing the deliberately obvious
+branch behaviour of escape-heavy data.
+
+A new integration link harness injects deterministic wire corruption, applies
+independent bandwidth limits in each direction and verifies interoperability
+with lrzsz in both sender/receiver pairings. Focused regressions also exercise
+retry-counter resets and a sparse windowed transfer across the signed 32-bit
+position boundary. These link checks now run as a dedicated CI release gate.
+
 2.03 release notes (25/08/26)
 
 Failures now make it all the way to the caller. Sender input errors, receiver
