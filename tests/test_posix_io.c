@@ -3,6 +3,7 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <errno.h>
 #include <fcntl.h>
 #include <signal.h>
 #include <stdio.h>
@@ -10,10 +11,13 @@
 #include <string.h>
 #include <sys/select.h>
 #include <sys/wait.h>
+#include <time.h>
 #include <unistd.h>
 
 #include "zmdm.h"
 #include "zmdm_posix.h"
+
+static volatile sig_atomic_t caught_signals;
 
 static bool
 expect(bool condition,const char * description)
@@ -28,6 +32,16 @@ static void
 catch_signal(int signal_number)
 {
 	(void)signal_number;
+	caught_signals += 1;
+}
+
+static int64_t
+elapsed_milliseconds(const struct timespec * start,const struct timespec * end)
+{
+	return ((int64_t)end->tv_sec * INT64_C(1000) +
+	    (int64_t)end->tv_nsec / INT64_C(1000000)) -
+	    ((int64_t)start->tv_sec * INT64_C(1000) +
+	    (int64_t)start->tv_nsec / INT64_C(1000000));
 }
 
 static bool
@@ -312,9 +326,13 @@ test_interrupted_wait(void)
 	struct zmodem_io io;
 	struct sigaction action;
 	struct sigaction previous;
+	struct timespec started = { 0,0 };
+	struct timespec finished = { 0,0 };
 	uint8_t byte;
 	size_t count;
 	int descriptors[2];
+	int read_result;
+	int wait_result;
 	pid_t child;
 	bool passed = true;
 
@@ -331,8 +349,14 @@ test_interrupted_wait(void)
 	}
 	child = fork();
 	if (child == 0) {
-		(void)usleep(10000U);
-		(void)kill(getppid(),SIGUSR1);
+		unsigned signal_index;
+
+		for (signal_index=0U;signal_index<10U;signal_index++) {
+			(void)usleep(30000U);
+			if (kill(getppid(),SIGUSR1) != 0) {
+				break;
+			}
+		}
 		_exit(0);
 	}
 	if (child < 0) {
@@ -343,9 +367,24 @@ test_interrupted_wait(void)
 	}
 	zmodem_posix_io_init(&posix_io,descriptors[0],descriptors[1]);
 	zmodem_posix_io_bind(&io,&posix_io);
-	passed = expect(io.read(io.context,&byte,1U,&count,250) == ZMODEM_TIMEOUT,
-	    "retry interrupted select") && passed;
-	passed = expect(waitpid(child,NULL,0) == child,
+	caught_signals = 0;
+	passed = expect(clock_gettime(CLOCK_MONOTONIC,&started) == 0,
+	    "start interrupted-wait clock") && passed;
+	read_result = io.read(io.context,&byte,1U,&count,200);
+	passed = expect(clock_gettime(CLOCK_MONOTONIC,&finished) == 0,
+	    "stop interrupted-wait clock") && passed;
+	passed = expect(read_result == ZMODEM_TIMEOUT,
+	    "retry interrupted select to original deadline") && passed;
+	passed = expect(caught_signals >= 3,
+	    "deliver repeated signals during wait") && passed;
+	passed = expect(elapsed_milliseconds(&started,&finished) >= INT64_C(150),
+	    "interrupted wait does not expire early") && passed;
+	passed = expect(elapsed_milliseconds(&started,&finished) < INT64_C(350),
+	    "interruptions do not restart timeout") && passed;
+	do {
+		wait_result = waitpid(child,NULL,0);
+	} while ((wait_result < 0) && (errno == EINTR));
+	passed = expect(wait_result == child,
 	    "wait for interrupted-wait helper") && passed;
 	passed = expect(sigaction(SIGUSR1,&previous,NULL) == 0,
 	    "restore interrupted-wait handler") && passed;

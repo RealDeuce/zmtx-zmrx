@@ -11,6 +11,7 @@
 #include <string.h>
 #include <sys/select.h>
 #include <termios.h>
+#include <time.h>
 #include <unistd.h>
 
 #include "zmdm.h"
@@ -19,11 +20,14 @@
 static int wrapped_tcsetattr(int, int, const struct termios *);
 static ssize_t wrapped_write(int, const void *, size_t);
 static int wrapped_close(int);
+static int wrapped_clock_gettime(clockid_t, struct timespec *);
 
 #define ZMODEM_POSIX_TCSETATTR wrapped_tcsetattr
 #define ZMODEM_POSIX_WRITE wrapped_write
 #define ZMODEM_POSIX_CLOSE wrapped_close
+#define ZMODEM_POSIX_CLOCK_GETTIME wrapped_clock_gettime
 #include "../zmdm_posix.c"
+#undef ZMODEM_POSIX_CLOCK_GETTIME
 #undef ZMODEM_POSIX_CLOSE
 #undef ZMODEM_POSIX_WRITE
 #undef ZMODEM_POSIX_TCSETATTR
@@ -35,6 +39,24 @@ static size_t partial_write_length;
 static int write_calls;
 static int failed_close_fd = -1;
 static int close_calls;
+static bool use_fake_clock;
+static int clock_gettime_failures;
+static struct timespec fake_clock_value;
+
+static int
+wrapped_clock_gettime(clockid_t clock_id,struct timespec * value)
+{
+	if (clock_gettime_failures > 0) {
+		clock_gettime_failures -= 1;
+		errno = EIO;
+		return -1;
+	}
+	if (use_fake_clock) {
+		*value = fake_clock_value;
+		return 0;
+	}
+	return clock_gettime(clock_id,value);
+}
 
 static int
 wrapped_tcsetattr(int fd,int action,const struct termios * attributes)
@@ -211,6 +233,88 @@ test_close_attempts_flush_and_close(void)
 	return passed;
 }
 
+static bool
+test_input_deadlines(void)
+{
+	struct timespec deadline;
+	struct timeval remaining;
+	bool passed = true;
+
+	use_fake_clock = true;
+	clock_gettime_failures = 0;
+	fake_clock_value.tv_sec = (time_t)10;
+	fake_clock_value.tv_nsec = 100000000L;
+	passed = expect_cleanup(set_input_deadline(&deadline,200) == 0,
+	    "set input deadline") && passed;
+	passed = expect_cleanup(deadline.tv_sec == (time_t)10,
+	    "deadline second without rollover") && passed;
+	passed = expect_cleanup(deadline.tv_nsec == 300000000L,
+	    "deadline nanoseconds without rollover") && passed;
+	fake_clock_value.tv_nsec = 900000000L;
+	passed = expect_cleanup(set_input_deadline(&deadline,200) == 0,
+	    "set rollover input deadline") && passed;
+	passed = expect_cleanup(deadline.tv_sec == (time_t)11,
+	    "deadline second rollover") && passed;
+	passed = expect_cleanup(deadline.tv_nsec == 100000000L,
+	    "deadline nanoseconds rollover") && passed;
+
+	fake_clock_value.tv_sec = (time_t)10;
+	fake_clock_value.tv_nsec = 200000000L;
+	passed = expect_cleanup(input_time_remaining(&deadline,&remaining) == 1,
+	    "calculate borrowed remaining time") && passed;
+	passed = expect_cleanup(remaining.tv_sec == (time_t)0,
+	    "borrow remaining second") && passed;
+	passed = expect_cleanup(remaining.tv_usec == (suseconds_t)900000,
+	    "borrow remaining microseconds") && passed;
+	fake_clock_value.tv_nsec = 50000000L;
+	passed = expect_cleanup(input_time_remaining(&deadline,&remaining) == 1,
+	    "calculate unborrowed remaining time") && passed;
+	passed = expect_cleanup(remaining.tv_sec == (time_t)1,
+	    "retain whole remaining second") && passed;
+	passed = expect_cleanup(remaining.tv_usec == (suseconds_t)50000,
+	    "retain remaining microseconds") && passed;
+	fake_clock_value.tv_nsec = 100000500L;
+	passed = expect_cleanup(input_time_remaining(&deadline,&remaining) == 1,
+	    "round remaining time upward") && passed;
+	passed = expect_cleanup(remaining.tv_sec == (time_t)1,
+	    "normalize rounded second") && passed;
+	passed = expect_cleanup(remaining.tv_usec == (suseconds_t)0,
+	    "normalize rounded microseconds") && passed;
+
+	fake_clock_value.tv_sec = deadline.tv_sec;
+	fake_clock_value.tv_nsec = 50000000L;
+	passed = expect_cleanup(input_time_remaining(&deadline,&remaining) == 1,
+	    "retain time within deadline second") && passed;
+	passed = expect_cleanup(remaining.tv_sec == (time_t)0,
+	    "deadline-second remaining seconds") && passed;
+	passed = expect_cleanup(remaining.tv_usec == (suseconds_t)50000,
+	    "deadline-second remaining microseconds") && passed;
+	fake_clock_value.tv_sec = deadline.tv_sec;
+	fake_clock_value.tv_nsec = deadline.tv_nsec;
+	passed = expect_cleanup(input_time_remaining(&deadline,&remaining) == 0,
+	    "expire at input deadline") && passed;
+	passed = expect_cleanup(remaining.tv_sec == (time_t)0,
+	    "clear expired timeout seconds") && passed;
+	passed = expect_cleanup(remaining.tv_usec == (suseconds_t)0,
+	    "clear expired timeout microseconds") && passed;
+	fake_clock_value.tv_sec += (time_t)1;
+	passed = expect_cleanup(input_time_remaining(&deadline,&remaining) == 0,
+	    "expire after input deadline") && passed;
+
+	clock_gettime_failures = 1;
+	passed = expect_cleanup(set_input_deadline(&deadline,200) < 0,
+	    "report deadline clock failure") && passed;
+	clock_gettime_failures = 1;
+	passed = expect_cleanup(input_time_remaining(&deadline,&remaining) < 0,
+	    "report remaining-time clock failure") && passed;
+	clock_gettime_failures = 1;
+	passed = expect_cleanup(wait_for_input(STDIN_FILENO,200) == ZMODEM_IO_ERROR,
+	    "propagate wait clock failure") && passed;
+	use_fake_clock = false;
+	clock_gettime_failures = 0;
+	return passed;
+}
+
 int
 main(void)
 {
@@ -219,5 +323,6 @@ main(void)
 	passed = test_failed_raw_setup_is_restored() && passed;
 	passed = test_failed_restore_is_retryable() && passed;
 	passed = test_close_attempts_flush_and_close() && passed;
+	passed = test_input_deadlines() && passed;
 	return passed ? 0 : 1;
 }

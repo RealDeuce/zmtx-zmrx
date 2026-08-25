@@ -39,12 +39,16 @@
 #include <signal.h>
 #include <string.h>
 #include <sys/select.h>
+#include <time.h>
 #include <unistd.h>
 
 #include "zmdm.h"
 
 #ifndef ZMODEM_POSIX_CLOSE
 #define ZMODEM_POSIX_CLOSE close
+#endif
+#ifndef ZMODEM_POSIX_CLOCK_GETTIME
+#define ZMODEM_POSIX_CLOCK_GETTIME clock_gettime
 #endif
 #ifndef ZMODEM_POSIX_TCSETATTR
 #define ZMODEM_POSIX_TCSETATTR tcsetattr
@@ -54,22 +58,83 @@
 #endif
 
 static int
+set_input_deadline(struct timespec * deadline,int timeout_ms)
+{
+	if (ZMODEM_POSIX_CLOCK_GETTIME(CLOCK_MONOTONIC,deadline) != 0) {
+		return -1;
+	}
+	deadline->tv_sec += (time_t)(timeout_ms / 1000);
+	deadline->tv_nsec += (long)(timeout_ms % 1000) * 1000000L;
+	if (deadline->tv_nsec >= 1000000000L) {
+		deadline->tv_sec += (time_t)1;
+		deadline->tv_nsec -= 1000000000L;
+	}
+	return 0;
+}
+
+static int
+input_time_remaining(const struct timespec * deadline,struct timeval * timeout)
+{
+	struct timespec now;
+	time_t seconds;
+	long nanoseconds;
+
+	if (ZMODEM_POSIX_CLOCK_GETTIME(CLOCK_MONOTONIC,&now) != 0) {
+		return -1;
+	}
+	if ((now.tv_sec > deadline->tv_sec) ||
+	    ((now.tv_sec == deadline->tv_sec) &&
+	    (now.tv_nsec >= deadline->tv_nsec))) {
+		timeout->tv_sec = 0;
+		timeout->tv_usec = 0;
+		return 0;
+	}
+	seconds = deadline->tv_sec - now.tv_sec;
+	if (deadline->tv_nsec < now.tv_nsec) {
+		seconds -= (time_t)1;
+		nanoseconds = deadline->tv_nsec + 1000000000L - now.tv_nsec;
+	}
+	else {
+		nanoseconds = deadline->tv_nsec - now.tv_nsec;
+	}
+	timeout->tv_sec = seconds;
+	timeout->tv_usec = (suseconds_t)((nanoseconds + 999L) / 1000L);
+	if (timeout->tv_usec >= (suseconds_t)1000000) {
+		timeout->tv_sec += (time_t)1;
+		timeout->tv_usec -= (suseconds_t)1000000;
+	}
+	return 1;
+}
+
+static int
 wait_for_input(int fd,int timeout_ms)
 {
 	int result;
 	fd_set read_set;
 	struct timeval timeout;
+	struct timespec deadline;
+	bool timed_wait;
 
 	if ((fd < 0) || (fd >= FD_SETSIZE)) {
 		return ZMODEM_IO_ERROR;
 	}
-	if (timeout_ms < 0) {
-		timeout_ms = 0;
+	timed_wait = timeout_ms > 0;
+	if (timed_wait) {
+		if (set_input_deadline(&deadline,timeout_ms) != 0) {
+			return ZMODEM_IO_ERROR;
+		}
 	}
 	for (;;) {
-		timeout.tv_sec = (time_t)(timeout_ms / 1000);
-		timeout.tv_usec = (suseconds_t)(timeout_ms % 1000) *
-		    (suseconds_t)1000;
+		if (timed_wait) {
+			result = input_time_remaining(&deadline,&timeout);
+			if (result <= 0) {
+				return result;
+			}
+		}
+		else {
+			timeout.tv_sec = 0;
+			timeout.tv_usec = 0;
+		}
 		FD_ZERO(&read_set);
 		FD_SET(fd,&read_set);
 		result = select(fd + 1,&read_set,NULL,NULL,&timeout);
