@@ -1,0 +1,73 @@
+@startuml
+title zmrx receiver — one-file transfer detail
+
+left to right direction
+hide empty description
+skinparam backgroundColor white
+skinparam shadowing false
+skinparam state {
+  BackgroundColor #F8FAFC
+  BorderColor #334155
+  ArrowColor #334155
+  FontColor #0F172A
+  StartColor #15803D
+  EndColor #991B1B
+}
+
+[*] -right-> ReadInfo
+
+state "Read ZFILE metadata" as ReadInfo
+ReadInfo : receive one data subpacket
+ReadInfo : malformed/corrupt / send ZNAK; await repeated ZFILE
+ReadInfo : timeout / await repeated ZFILE
+ReadInfo -right-> Select : valid ENDOFFRAME + ZCRCW
+
+state "Apply file policy" as Select
+Select : validate name, size, date, and management flags
+Select -down-> Skipped : unsafe name or skip policy / send ZSKIP
+Select -right-> Open : accept new, overwrite, or resume
+
+state "Open destination" as Open
+Open : create, truncate, or append for recovery
+Open -right-> AwaitHeader : success / send ZRPOS(committed pos)
+
+state "Await ZDATA or ZEOF" as AwaitHeader
+AwaitHeader : TIMEOUT [errors < 10] / send ZRPOS
+AwaitHeader : repeated ZFILE / consume metadata; send ZRPOS
+AwaitHeader : mismatched ZDATA / purge; send ZRPOS
+AwaitHeader : mismatched ZEOF / ignore
+AwaitHeader -down-> Receive : matching ZDATA(pos)
+AwaitHeader -down-> Finalize : matching ZEOF(pos)
+
+state "Verify and commit subpacket" as Receive
+Receive : decode escapes; verify CRC; write payload
+Receive : ZCRCG / continue current ZDATA frame
+Receive : ZCRCQ / send ZACK(new pos); continue
+Receive -right-> ReturnToHeader : ZCRCE, ZCRCW, or invalid data
+
+state "Return to header scan" as ReturnToHeader
+ReturnToHeader : ZCRCE / frame ended
+ReturnToHeader : ZCRCW / send ZACK; frame ended
+ReturnToHeader : invalid data / purge; send ZRPOS
+ReturnToHeader -up-> AwaitHeader
+
+state "Finalize destination" as Finalize
+Finalize : verify position; flush; close; set mtime
+Finalize -right-> Succeeded : success
+
+state "File succeeded" as Succeeded
+state "File skipped" as Skipped
+Skipped : return RECEIVE_SKIPPED
+Succeeded -right-> [*]
+
+note bottom of Receive
+  The committed position advances only after fwrite() succeeds
+  and ftello() confirms the expected offset. Every ZRPOS names
+  this last committed position.
+end note
+
+legend bottom
+  Fatal protocol/local I/O errors, cancellation, and exhausted
+  10-attempt loops send ZFERR when possible and fail the transfer.
+endlegend
+@enduml

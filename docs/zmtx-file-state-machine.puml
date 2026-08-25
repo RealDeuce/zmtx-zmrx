@@ -1,0 +1,79 @@
+@startuml
+title zmtx sender — one-file transfer detail
+
+left to right direction
+hide empty description
+skinparam backgroundColor white
+skinparam shadowing false
+skinparam state {
+  BackgroundColor #F8FAFC
+  BorderColor #334155
+  ArrowColor #334155
+  FontColor #0F172A
+  StartColor #15803D
+  EndColor #991B1B
+}
+
+[*] -right-> Announce
+
+state "Announce file" as Announce
+Announce : send ZFILE + metadata/ZCRCW
+Announce : ZACK / ignore
+Announce : first stale ZRINIT / refresh capabilities
+Announce : other response or timeout [attempts < 10] / resend
+Announce -right-> Position : ZRPOS(pos)
+Announce -down-> Skipped : ZSKIP
+
+state "Seek requested offset" as Position
+Position : seek input file to pos
+Position -right-> Stream : success / send ZDATA(pos)
+
+state "Stream subpackets" as Stream
+Stream : read, escape, CRC, and send blocks
+Stream : ZCRCG / continue
+Stream : ZCRCQ / request asynchronous ZACK; continue
+Stream : asynchronous valid ZACK / advance acknowledged offset
+Stream -down-> AwaitAck : ZCRCW or send window full
+Stream -right-> EndFile : ZCRCE
+Stream -up-> Retry : ZRPOS, ZNAK, or timeout
+Stream -down-> Skipped : ZSKIP
+
+state "Await required ZACK" as AwaitAck
+AwaitAck : stale ZACK / keep waiting
+AwaitAck : valid ZACK [window remains full] / keep waiting
+AwaitAck -up-> Stream : required ZACK / advance acknowledged offset;\nreopen ZDATA frame when ZCRCW closed it
+AwaitAck -right-> EndFile : required ZACK [EOF already reached]
+AwaitAck -left-> Retry : ZRPOS, ZNAK, timeout,\nor invalid ACK position
+
+state "Reduce block and retry" as Retry
+Retry : use new offset when ZRPOS supplied
+Retry : reduce current subpacket size
+Retry -left-> Position : file attempts remain
+
+state "Finish file" as EndFile
+EndFile : send ZEOF(file size)
+EndFile : ZACK or timeout [finish attempts remain] / resend
+EndFile -up-> Retry : ZRPOS(pos)
+EndFile -down-> Succeeded : ZRINIT
+EndFile -down-> Skipped : ZSKIP
+
+state "File succeeded" as Succeeded
+state "File skipped" as Skipped
+Succeeded -right-> [*]
+Skipped -right-> [*]
+
+note bottom of Stream
+  ZCRCG and ZCRCQ keep the ZDATA frame open.
+  ZCRCE and ZCRCW close it.
+end note
+
+note bottom of Retry
+  ZRPOS supplies a new offset. ZNAK and timeout use the
+  last receiver-requested offset retained by send_file().
+end note
+
+legend bottom
+  Fatal protocol/local I/O errors and exhausted 10-attempt loops
+  leave this state machine as a failed file transfer.
+endlegend
+@enduml

@@ -1,0 +1,65 @@
+@startuml
+title zmtx sender — session state machine
+
+top to bottom direction
+hide empty description
+skinparam backgroundColor white
+skinparam shadowing false
+skinparam state {
+  BackgroundColor #F8FAFC
+  BorderColor #334155
+  ArrowColor #334155
+  FontColor #0F172A
+  StartColor #15803D
+  EndColor #991B1B
+}
+
+[*] -down-> Contact
+
+state "Establish contact" as Contact
+Contact : send "zm\\r" + ZRQINIT
+Contact : non-ZRINIT [attempts < 10] / retry
+Contact -down-> Ready : ZRINIT / parse receiver capabilities
+
+state "Ready for next file" as Ready
+Ready -down-> Offer : file queued
+Ready -right-> Closing : no files remain
+
+state "Offer one file" as Offer
+Offer : send ZFILE + metadata/ZCRCW
+Offer : no ZRPOS yet [attempts < 10] / retry
+Offer -down-> Transfer : ZRPOS(offset)
+Offer -left-> Ready : ZSKIP
+
+state "Transfer one file" as Transfer
+Transfer : stream ZDATA subpackets
+Transfer : ZRPOS, ZNAK, or timeout / reposition and retry
+Transfer -down-> Ready : file accepted by ZRINIT or skipped by ZSKIP
+
+state "Failed transfer" as TransferFailed
+Offer -right-> TransferFailed : fatal error or retry limit
+Transfer -right-> TransferFailed : fatal error or retry limit
+TransferFailed -up-> Closing : mark process failed
+
+state "Close session" as Closing
+Closing : send ZFIN
+Closing : non-ZFIN [attempts < 10] / retry
+Closing -down-> OverAndOut : ZFIN
+
+state "Send over-and-out" as OverAndOut
+OverAndOut : send "OO" and flush
+OverAndOut -down-> Success : success
+OverAndOut -right-> Failure : I/O error
+Closing -right-> Failure : retry limit or I/O error
+Contact -right-> Failure : retry limit or I/O error
+
+state "Successful exit" as Success
+state "Failed exit" as Failure
+Success -down-> [*]
+Failure -down-> [*]
+
+note left of Transfer
+  See zmtx-file-state-machine.svg for framing,
+  acknowledgement, and resynchronization detail.
+end note
+@enduml

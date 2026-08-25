@@ -1,0 +1,60 @@
+@startuml
+title zmrx receiver — session state machine
+
+top to bottom direction
+hide empty description
+skinparam backgroundColor white
+skinparam shadowing false
+skinparam state {
+  BackgroundColor #F8FAFC
+  BorderColor #334155
+  ArrowColor #334155
+  FontColor #0F172A
+  StartColor #15803D
+  EndColor #991B1B
+}
+
+[*] -down-> Contact
+
+state "Establish contact" as Contact
+Contact : send ZRINIT capabilities
+Contact : TIMEOUT or ZRQINIT [attempts < 10] / resend ZRINIT
+Contact -down-> Dispatch : other valid header
+
+state "Dispatch session header" as Dispatch
+Dispatch : ZRQINIT or stray ZEOF / send ZRINIT
+Dispatch : unsupported request / send ZCOMPL
+Dispatch : timeout [attempts remain] / send ZRINIT
+Dispatch -down-> ReceiveFile : ZFILE
+Dispatch -right-> Closing : ZFIN
+
+state "Receive one file" as ReceiveFile
+ReceiveFile : success / send ZRINIT
+ReceiveFile : skipped or retriable ZFILE error / no invitation
+ReceiveFile -up-> Dispatch : handler returns
+
+state "Failed transfer" as TransferFailed
+ReceiveFile -right-> TransferFailed : fatal error or retry limit / send ZFERR if possible
+Dispatch -right-> TransferFailed : fatal error or retry limit
+TransferFailed -up-> Closing : mark process failed
+
+state "Close session" as Closing
+Closing : send ZFIN
+Closing -down-> WaitOO : success
+Closing -right-> Failure : I/O error
+
+state "Wait for OO" as WaitOO
+WaitOO -down-> Success : two 'O' bytes received
+WaitOO -right-> Failure : timeout or I/O error
+Contact -right-> Failure : retry limit, cancellation, or I/O error
+
+state "Successful exit" as Success
+state "Failed exit" as Failure
+Success -down-> [*]
+Failure -down-> [*]
+
+note left of ReceiveFile
+  See zmrx-file-state-machine.svg for file policy,
+  data framing, commit, and recovery detail.
+end note
+@enduml

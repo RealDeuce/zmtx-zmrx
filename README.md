@@ -21,6 +21,10 @@ make
 make check
 ```
 
+The [implemented protocol state machines](docs/protocol-state-machine.md)
+show the sender and receiver control flow, including streaming acknowledgements,
+recovery, retries, and session cleanup.
+
 The `install` target installs `zmtx` and `zmrx` under `/usr/local/bin` and
 their manual pages under `/usr/local/share/man/man1`. The paths and install
 tools are overridable; for example, a staged package installation can use:
