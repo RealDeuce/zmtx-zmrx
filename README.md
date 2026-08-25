@@ -22,8 +22,8 @@ make check
 ```
 
 Optional end-to-end link tests exercise corruption recovery, asymmetric
-bandwidth, and interoperability with `lrzsz` when `lsz` and `lrz` are
-installed:
+bandwidth, and interoperability with `lrzsz` when either `lsz`/`lrz` or
+`sz`/`rz` are installed:
 
 ```sh
 make check-link

@@ -14,8 +14,10 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 ZMTX = Path(os.environ.get("ZMTX", ROOT / "zmtx"))
 ZMRX = Path(os.environ.get("ZMRX", ROOT / "zmrx"))
-LSZ = os.environ.get("LSZ") or shutil.which("lsz")
-LRZ = os.environ.get("LRZ") or shutil.which("lrz")
+LSZ = (os.environ.get("LSZ") or shutil.which("lsz") or
+       shutil.which("sz"))
+LRZ = (os.environ.get("LRZ") or shutil.which("lrz") or
+       shutil.which("rz"))
 CHUNK_SIZE = 65536
 
 
