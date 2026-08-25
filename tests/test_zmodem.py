@@ -2,6 +2,9 @@
 
 import errno
 import os
+import resource
+import select
+import signal
 import socket
 import subprocess
 import tempfile
@@ -47,6 +50,7 @@ ZCRCG = 0x69
 ZCRCQ = 0x6A
 ZCRCW = 0x6B
 ESCAPE_BYTES = {ZDLE, 0x10, 0x90, XON, 0x91, 0x13, 0x93}
+FILE_WRITE_LIMIT = 16 * 1024 * 1024
 
 
 def crc16_update(crc, value):
@@ -253,6 +257,12 @@ def finish_receiver(peer, process):
     return process.returncode, stderr
 
 
+def reject_file_growth():
+    signal.signal(signal.SIGXFSZ, signal.SIG_IGN)
+    resource.setrlimit(resource.RLIMIT_FSIZE,
+                       (FILE_WRITE_LIMIT, FILE_WRITE_LIMIT))
+
+
 class ZmodemTests(unittest.TestCase):
     def run_self_transfer(self, contents):
         with tempfile.TemporaryDirectory() as temporary:
@@ -288,11 +298,11 @@ class ZmodemTests(unittest.TestCase):
             for name, content in zip(names, contents):
                 self.assertEqual((destination / name).read_bytes(), content)
 
-    def start_receiver(self, cwd, *options):
+    def start_receiver(self, cwd, *options, preexec_fn=None):
         local, remote = socket.socketpair()
         process = subprocess.Popen(
             [str(ZMRX), *options], cwd=cwd, stdin=local, stdout=local,
-            stderr=subprocess.PIPE,
+            stderr=subprocess.PIPE, preexec_fn=preexec_fn,
         )
         local.close()
         peer = Peer(remote)
@@ -588,6 +598,7 @@ class ZmodemTests(unittest.TestCase):
 
     def test_receiver_rejects_malformed_sender_initialization(self):
         cases = (
+            (b"", ZCRCW),
             (b"unterminated", ZCRCW),
             (b"attention\0", ZCRCE),
             (b"a" * 33, ZCRCW),
@@ -609,6 +620,61 @@ class ZmodemTests(unittest.TestCase):
                     if process.poll() is None:
                         process.kill()
                         process.wait()
+
+    def test_receiver_stops_on_sender_initialization_cancellation(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            process, peer = self.start_receiver(temporary)
+            try:
+                peer.send(hex_header(ZSINIT) + bytes((ZDLE,)) * 5)
+                frame_type, _, _ = peer.header()
+                self.assertEqual(frame_type, ZFIN)
+                peer.send(b"OO")
+                stderr = process.communicate(timeout=10)[1]
+                self.assertEqual(process.returncode, 4,
+                                 stderr.decode(errors="replace"))
+                self.assertIn(b"can't receive sender initialization", stderr)
+                self.assertIn(b"transfer cancelled", stderr)
+            finally:
+                peer.sock.close()
+                if process.poll() is None:
+                    process.kill()
+                    process.wait()
+
+    def test_receiver_stops_on_session_header_cancellation(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            process, peer = self.start_receiver(temporary)
+            try:
+                peer.send(hex_header(ZACK))
+                frame_type, _, _ = peer.header()
+                self.assertEqual(frame_type, ZCOMPL)
+                peer.send(bytes((ZDLE,)) * 5)
+                frame_type, _, _ = peer.header()
+                self.assertEqual(frame_type, ZFIN)
+                peer.send(b"OO")
+                stderr = process.communicate(timeout=10)[1]
+                self.assertEqual(process.returncode, 4,
+                                 stderr.decode(errors="replace"))
+                self.assertIn(b"file-session input failed", stderr)
+                self.assertIn(b"transfer cancelled", stderr)
+            finally:
+                peer.sock.close()
+                if process.poll() is None:
+                    process.kill()
+                    process.wait()
+
+    def test_receiver_reports_sender_initialization_output_failures(self):
+        for attention in (b"attention\0", b""):
+            with self.subTest(length=len(attention)), \
+                    tempfile.TemporaryDirectory() as temporary:
+                process, peer = self.start_receiver(temporary)
+                peer.send(hex_header(ZSINIT) +
+                          data_subpacket(attention, ZCRCW))
+                peer.sock.close()
+                stderr = process.communicate(timeout=10)[1]
+                self.assertEqual(process.returncode, 4,
+                                 stderr.decode(errors="replace"))
+                self.assertIn(b"can't receive sender initialization", stderr)
+                self.assertIn(b"transport I/O error", stderr)
 
     def test_receiver_handles_session_control_headers(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -1389,18 +1455,19 @@ class ZmodemTests(unittest.TestCase):
                     )
                     self.assertEqual(result.returncode, returncode)
 
-    @unittest.skipUnless(Path("/dev/full").exists(), "/dev/full is unavailable")
     def test_programs_report_initial_output_failure(self):
         with tempfile.TemporaryDirectory() as temporary:
             source = Path(temporary) / "unused.bin"
             source.write_bytes(b"unused")
             cases = ((ZMTX, (source.name,)), (ZMRX, ()))
             for program, arguments in cases:
+                read_fd, write_fd = os.pipe()
+                os.close(read_fd)
                 with self.subTest(program=program.name), \
-                        open("/dev/full", "wb", buffering=0) as full:
+                        os.fdopen(write_fd, "wb", buffering=0) as broken:
                     result = subprocess.run(
                         [str(program), *arguments], cwd=temporary,
-                        stdin=subprocess.DEVNULL, stdout=full,
+                        stdin=subprocess.DEVNULL, stdout=broken,
                         stderr=subprocess.PIPE, timeout=10,
                     )
                     self.assertEqual(result.returncode, 3,
@@ -1855,22 +1922,38 @@ class ZmodemTests(unittest.TestCase):
                     process.kill()
                     process.wait()
 
-    @unittest.skipUnless(Path("/dev/full").exists(), "/dev/full is unavailable")
     def test_receiver_reports_immediate_write_failure(self):
         with tempfile.TemporaryDirectory() as temporary:
-            process, peer = self.start_receiver(temporary)
+            target = Path(temporary) / "immediate-write-failure"
+            with target.open("wb") as output:
+                output.truncate(FILE_WRITE_LIMIT)
+            os.utime(target, (1000, 1000))
+            process, peer = self.start_receiver(
+                temporary, preexec_fn=reject_file_growth)
             try:
                 payload = bytes(index & 0xFF for index in range(8192))
-                info = b"/dev/full\0" + b"8192 0 0 0 1 0\0"
+                block_count = 64
+                metadata = (f"{FILE_WRITE_LIMIT + block_count * len(payload)} "
+                            "1750 0 0 1 0\0").encode()
+                info = target.name.encode() + b"\0" + metadata
                 peer.send(hex_header(
                     ZFILE, header=bytes((ZFILE, 1, 0, 0, 0))) +
                     data_subpacket(info, ZCRCW))
                 frame_type, position, _ = peer.header()
-                self.assertEqual((frame_type, position), (ZRPOS, 0))
-                peer.send(hex_header(ZDATA) +
-                          data_subpacket(payload, ZCRCE))
-                frame_type, position, _ = peer.header()
-                self.assertEqual((frame_type, position), (ZFERR, 0))
+                self.assertEqual((frame_type, position),
+                                 (ZRPOS, FILE_WRITE_LIMIT))
+                peer.send(hex_header(ZDATA, FILE_WRITE_LIMIT))
+                for _ in range(block_count):
+                    peer.send(data_subpacket(payload, ZCRCG))
+                    if select.select((peer.sock,), (), (), 0.1)[0]:
+                        frame_type, position, _ = peer.header()
+                        break
+                else:
+                    self.fail("receiver did not report the bounded write")
+                self.assertEqual(frame_type, ZFERR)
+                self.assertGreaterEqual(position, FILE_WRITE_LIMIT)
+                self.assertLess(position,
+                                FILE_WRITE_LIMIT + block_count * len(payload))
                 frame_type, _, _ = peer.header()
                 self.assertEqual(frame_type, ZFIN)
                 peer.send(b"OO")
@@ -1878,34 +1961,42 @@ class ZmodemTests(unittest.TestCase):
                 self.assertEqual(process.returncode, 4,
                                  stderr.decode(errors="replace"))
                 self.assertIn(b"can't write file", stderr)
-                self.assertIn(os.strerror(errno.ENOSPC).encode(), stderr)
+                self.assertIn(os.strerror(errno.EFBIG).encode(), stderr)
             finally:
                 peer.sock.close()
                 if process.poll() is None:
                     process.kill()
                     process.wait()
 
-    @unittest.skipUnless(Path("/dev/full").exists(), "/dev/full is unavailable")
     def test_receiver_reports_delayed_write_failure(self):
         with tempfile.TemporaryDirectory() as temporary:
-            process, peer = self.start_receiver(temporary)
+            target = Path(temporary) / "delayed-write-failure"
+            with target.open("wb") as output:
+                output.truncate(FILE_WRITE_LIMIT)
+            os.utime(target, (1000, 1000))
+            process, peer = self.start_receiver(
+                temporary, preexec_fn=reject_file_growth)
             try:
-                info = b"/dev/full\0" + b"3 0 0 0 1 0\0"
+                info = target.name.encode() + b"\0" + \
+                    f"{FILE_WRITE_LIMIT + 3} 1750 0 0 1 0\0".encode()
                 peer.send(hex_header(ZFILE, header=bytes((ZFILE, 1, 0, 0, 0))) +
                           data_subpacket(info, ZCRCW))
                 frame_type, position, _ = peer.header()
-                self.assertEqual((frame_type, position), (ZRPOS, 0))
-                peer.send(hex_header(ZDATA) + data_subpacket(b"bad", ZCRCE))
-                peer.send(hex_header(ZEOF, 3))
+                self.assertEqual((frame_type, position),
+                                 (ZRPOS, FILE_WRITE_LIMIT))
+                peer.send(hex_header(ZDATA, FILE_WRITE_LIMIT) +
+                          data_subpacket(b"bad", ZCRCE))
+                peer.send(hex_header(ZEOF, FILE_WRITE_LIMIT + 3))
                 frame_type, position, _ = peer.header()
-                self.assertEqual((frame_type, position), (ZFERR, 3))
+                self.assertEqual((frame_type, position),
+                                 (ZFERR, FILE_WRITE_LIMIT + 3))
                 frame_type, _, _ = peer.header()
                 self.assertEqual(frame_type, ZFIN)
                 peer.send(b"OO")
                 stderr = process.communicate(timeout=10)[1]
                 self.assertEqual(process.returncode, 4, stderr.decode(errors="replace"))
                 self.assertIn(b"can't flush file", stderr)
-                self.assertIn(os.strerror(errno.ENOSPC).encode(), stderr)
+                self.assertIn(os.strerror(errno.EFBIG).encode(), stderr)
             finally:
                 peer.sock.close()
                 if process.poll() is None:

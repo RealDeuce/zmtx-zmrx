@@ -394,11 +394,16 @@ test_eighth_bit_escaping(void)
 	    "transmit with eighth-bit escaping");
 	passed = expect(sending_io.output_length >= 4U,
 	    "eighth-bit escaped wire length") && passed;
-	passed = expect(sending_io.output[0] == ZDLE &&
-	    sending_io.output[1] == (uint8_t)(payload[0] ^ 0x40U) &&
-	    sending_io.output[2] == ZDLE &&
-	    sending_io.output[3] == (uint8_t)(payload[1] ^ 0x40U),
-	    "eighth-bit escaped wire bytes") && passed;
+	passed = expect(sending_io.output[0] == ZDLE,
+	    "first eighth-bit escape marker") && passed;
+	passed = expect(sending_io.output[1] ==
+	    (uint8_t)(payload[0] ^ 0x40U),
+	    "first eighth-bit escaped value") && passed;
+	passed = expect(sending_io.output[2] == ZDLE,
+	    "second eighth-bit escape marker") && passed;
+	passed = expect(sending_io.output[3] ==
+	    (uint8_t)(payload[1] ^ 0x40U),
+	    "second eighth-bit escaped value") && passed;
 
 	initialize(&receiver,&receiving_io);
 	receiver.receive_escaped_8th_bit = true;

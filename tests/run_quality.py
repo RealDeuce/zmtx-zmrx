@@ -52,6 +52,29 @@ def llvm_toolchain():
             resolved = tuple(shutil.which(name) for name in names)
             if all(path is not None for path in resolved):
                 return resolved
+    if sys.platform == "darwin":
+        brew = shutil.which("brew")
+        if brew is not None:
+            installed = subprocess.run(
+                [brew, "list", "--formula"], check=False, text=True,
+                stdout=subprocess.PIPE,
+            )
+            formulae = set(installed.stdout.split())
+            candidates = [f"llvm@{suffix}" for suffix in
+                          ("22", "21", "20", "19", "18")]
+            candidates.append("llvm")
+            for formula in candidates:
+                if formula not in formulae:
+                    continue
+                prefix = subprocess.run(
+                    [brew, "--prefix", formula], check=True, text=True,
+                    stdout=subprocess.PIPE,
+                ).stdout.strip()
+                directory = Path(prefix) / "bin"
+                resolved = tuple(str(directory / name) for name in
+                                 ("clang", "llvm-profdata", "llvm-cov"))
+                if all(Path(path).is_file() for path in resolved):
+                    return resolved
     resolved = tuple(shutil.which(name) for name in
                      ("clang", "llvm-profdata", "llvm-cov"))
     if all(path is not None for path in resolved):
@@ -103,6 +126,7 @@ def static_analysis(directory):
 
     clang_tidy = os.environ.get("CLANG_TIDY")
     tidy_candidates = ([clang_tidy] if clang_tidy else [
+        str(Path(clang).with_name("clang-tidy")),
         "clang-tidy22", "clang-tidy21", "clang-tidy20", "clang-tidy19",
         "clang-tidy17", "clang-tidy15", "clang-tidy",
     ])

@@ -41,8 +41,16 @@ jobs:
         run: make check check-install
 
   quality:
-    name: High-integrity quality gates
-    runs-on: ubuntu-latest
+    name: High-integrity quality gates on ${{ matrix.name }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Ubuntu
+            runner: ubuntu-latest
+          - name: macOS
+            runner: macos-latest
 
     steps:
       - name: Check out source
