@@ -25,6 +25,27 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 Special thanks to Jacques Mattheij, formerly of Mattheij Computer Service,
 and original author of zmtx/zmrx.
 
+2.03 release notes (25/08/26)
+
+Failures now make it all the way to the caller. Sender input errors, receiver
+terminal failures, output and cleanup errors, and delayed writes are reported
+reliably. Protected receives no longer risk truncating an existing file, and
+interrupted input waits retain their original deadline.
+
+Negotiated ESCCTL and ESC8 escaping now works in both directions. The receiver
+adds -e and -b options to request these protections, and the implemented sender
+and receiver state machines are documented with focused UML diagrams.
+
+The epic benchmark battle with Synchronet's sexyz continues. Receive and
+transmit paths now process spans of ordinary unescaped bytes in bulk and update
+CRCs by span, substantially reducing per-byte work. sexyz remains a formidable
+opponent; the current test setup hit its throughput ceiling before either side
+could claim an uncontested victory.
+
+High-integrity CI now runs on Ubuntu and macOS, including static analysis,
+sanitizers, fuzzing, at least 90 percent branch coverage, and 100 percent MC/DC
+coverage.
+
 2.02 release notes (24/08/26)
 
 This release substantially restructures the implementation around a documented
