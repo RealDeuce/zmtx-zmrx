@@ -329,15 +329,23 @@ test_interrupted_wait(void)
 	struct timespec started = { 0,0 };
 	struct timespec finished = { 0,0 };
 	uint8_t byte;
+	uint8_t ready;
 	size_t count;
 	int descriptors[2];
+	int ready_pipe[2];
 	int read_result;
 	int wait_result;
+	ssize_t ready_result;
 	pid_t child;
 	bool passed = true;
 
 	if (pipe(descriptors) != 0) {
 		return expect(false,"create interrupted-wait pipe");
+	}
+	if (pipe(ready_pipe) != 0) {
+		(void)close(descriptors[0]);
+		(void)close(descriptors[1]);
+		return expect(false,"create interrupted-wait readiness pipe");
 	}
 	(void)memset(&action,0,sizeof(action));
 	action.sa_handler = catch_signal;
@@ -345,12 +353,21 @@ test_interrupted_wait(void)
 	    (sigaction(SIGUSR1,&action,&previous) != 0)) {
 		(void)close(descriptors[0]);
 		(void)close(descriptors[1]);
+		(void)close(ready_pipe[0]);
+		(void)close(ready_pipe[1]);
 		return expect(false,"install interrupted-wait handler");
 	}
 	child = fork();
 	if (child == 0) {
 		unsigned signal_index;
 
+		(void)close(ready_pipe[0]);
+		ready = UINT8_C(1);
+		if (write(ready_pipe[1],&ready,sizeof(ready)) !=
+		    (ssize_t)sizeof(ready)) {
+			_exit(1);
+		}
+		(void)close(ready_pipe[1]);
 		for (signal_index=0U;signal_index<10U;signal_index++) {
 			(void)usleep(30000U);
 			if (kill(getppid(),SIGUSR1) != 0) {
@@ -363,8 +380,18 @@ test_interrupted_wait(void)
 		(void)sigaction(SIGUSR1,&previous,NULL);
 		(void)close(descriptors[0]);
 		(void)close(descriptors[1]);
+		(void)close(ready_pipe[0]);
+		(void)close(ready_pipe[1]);
 		return expect(false,"fork interrupted-wait helper");
 	}
+	(void)close(ready_pipe[1]);
+	do {
+		ready_result = read(ready_pipe[0],&ready,sizeof(ready));
+	} while ((ready_result < 0) && (errno == EINTR));
+	passed = expect(ready_result == (ssize_t)sizeof(ready),
+	    "start interrupted-wait helper") && passed;
+	passed = expect(close(ready_pipe[0]) == 0,
+	    "close interrupted-wait readiness pipe") && passed;
 	zmodem_posix_io_init(&posix_io,descriptors[0],descriptors[1]);
 	zmodem_posix_io_bind(&io,&posix_io);
 	caught_signals = 0;

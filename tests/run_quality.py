@@ -93,11 +93,11 @@ def gcc_compiler():
     return tool("GCC", "gcc")
 
 
-def run(command, *, cwd=ROOT, env=None, quiet=False):
+def run(command, *, cwd=ROOT, env=None, quiet=False, timeout=None):
     if not quiet:
         print("+", " ".join(str(item) for item in command), flush=True)
     subprocess.run([str(item) for item in command], cwd=cwd, env=env,
-                   check=True)
+                   check=True, timeout=timeout)
 
 
 def compile_program(compiler, output, sources, flags):
@@ -143,45 +143,54 @@ def static_analysis(directory):
         print("note: optional clang-tidy was not found", flush=True)
 
 
-def build_instrumented(directory, flags):
-    clang, _, _ = llvm_toolchain()
+def build_instrumented(directory, flags, compiler=None):
+    if compiler is None:
+        compiler, _, _ = llvm_toolchain()
     diagnostics = ["-Wall", "-Wextra", "-Werror", "-pedantic-errors"]
     common_sources = ["zmdm.c", "zmdm_posix.c", "crctab.c"]
-    compile_program(clang, directory / "zmtx",
+    compile_program(compiler, directory / "zmtx",
                     ["zmtx.c", *common_sources], [*diagnostics, *flags])
-    compile_program(clang, directory / "zmrx",
+    compile_program(compiler, directory / "zmrx",
                     ["zmrx.c", *common_sources], [*diagnostics, *flags])
-    compile_program(clang, directory / "test_crc",
+    compile_program(compiler, directory / "test_crc",
                     ["tests/test_crc.c", "crctab.c"],
                     [*diagnostics, *flags])
-    compile_program(clang, directory / "test_zmdm",
+    compile_program(compiler, directory / "test_zmdm",
                     ["tests/test_zmdm.c", "zmdm.c", "crctab.c"],
                     [*diagnostics, *flags])
-    compile_program(clang, directory / "test_zmtx",
+    compile_program(compiler, directory / "test_zmtx",
                     ["tests/test_zmtx.c", *common_sources],
                     [*diagnostics, *flags])
-    compile_program(clang, directory / "test_zmrx",
+    compile_program(compiler, directory / "test_zmrx",
                     ["tests/test_zmrx.c", *common_sources],
                     [*diagnostics, *flags])
-    compile_program(clang, directory / "test_posix_io",
+    compile_program(compiler, directory / "test_posix_io",
                     ["tests/test_posix_io.c", "zmdm_posix.c"],
                     [*diagnostics, *flags])
-    compile_program(clang, directory / "test_posix_cleanup",
+    compile_program(compiler, directory / "test_posix_cleanup",
                     ["tests/test_posix_cleanup.c"],
                     [*diagnostics, *flags])
 
 
 def run_tests(directory, environment):
-    run([directory / "test_crc"], env=environment)
-    run([directory / "test_zmdm"], env=environment)
-    run([directory / "test_zmtx"], env=environment)
-    run([directory / "test_zmrx"], env=environment)
-    run([directory / "test_posix_io"], env=environment)
-    run([directory / "test_posix_cleanup"], env=environment)
+    run([directory / "test_crc"], env=environment, timeout=60)
+    run([directory / "test_zmdm"], env=environment, timeout=60)
+    run([directory / "test_zmtx"], env=environment, timeout=60)
+    run([directory / "test_zmrx"], env=environment, timeout=60)
+    run([directory / "test_posix_io"], env=environment, timeout=60)
+    run([directory / "test_posix_cleanup"], env=environment, timeout=60)
     test_environment = environment.copy()
     test_environment["ZMTX"] = str(directory / "zmtx")
     test_environment["ZMRX"] = str(directory / "zmrx")
-    run([sys.executable, ROOT / "tests/test_zmodem.py"], env=test_environment)
+    run([sys.executable, ROOT / "tests/test_zmodem.py"],
+        env=test_environment, timeout=300)
+
+
+def runtime_instrumentation_compiler():
+    if sys.platform == "darwin" and os.environ.get("CLANG") is None:
+        return tool("CLANG", "clang")
+    clang, _, _ = llvm_toolchain()
+    return clang
 
 
 def sanitizers(directory):
@@ -189,7 +198,7 @@ def sanitizers(directory):
         "-O1", "-g", "-fno-omit-frame-pointer",
         "-fsanitize=address,undefined",
     ]
-    build_instrumented(directory, flags)
+    build_instrumented(directory, flags, runtime_instrumentation_compiler())
     environment = os.environ.copy()
     asan_options = ["strict_string_checks=1"]
     if sys.platform.startswith("linux"):
@@ -200,7 +209,7 @@ def sanitizers(directory):
 
 
 def fuzz(directory):
-    clang, _, _ = llvm_toolchain()
+    clang = runtime_instrumentation_compiler()
     executable = directory / "fuzz_zmdm"
     corpus = directory / "fuzz-corpus"
 
@@ -214,7 +223,7 @@ def fuzz(directory):
          "-Werror", "-pedantic-errors", "-fsanitize=fuzzer,address,undefined"],
     )
     run([executable, corpus, ROOT / "tests/fuzz_corpus", "-runs=10000",
-         "-max_len=16384", "-timeout=10", "-verbosity=0"])
+         "-max_len=16384", "-timeout=10", "-verbosity=0"], timeout=120)
 
 
 def coverage(directory):
