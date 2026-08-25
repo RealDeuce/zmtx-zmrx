@@ -209,7 +209,8 @@ def sanitizers(directory):
 
 
 def fuzz(directory):
-    clang = runtime_instrumentation_compiler()
+    # Current Apple toolchains omit libclang_rt.fuzzer_osx.a.
+    clang, _, _ = llvm_toolchain()
     executable = directory / "fuzz_zmdm"
     corpus = directory / "fuzz-corpus"
 
