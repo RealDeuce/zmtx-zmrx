@@ -371,6 +371,53 @@ data_round_trip(bool use_crc32,bool escape_controls,uint8_t sent_frame_end,
 }
 
 static bool
+test_eighth_bit_escaping(void)
+
+{
+	uint8_t payload[128];
+	struct zmodem sender;
+	struct zmodem receiver;
+	struct fake_io sending_io;
+	struct fake_io receiving_io;
+	uint8_t received[sizeof(payload)];
+	uint8_t frame_end;
+	size_t length;
+	unsigned value;
+	bool passed;
+
+	for (value=0;value<sizeof(payload);value++) {
+		payload[value] = (uint8_t)(value | 0x80U);
+	}
+	initialize(&sender,&sending_io);
+	sender.escape_8th_bit = true;
+	passed = expect(tx_data(&sender,ZCRCE,payload,sizeof(payload)) == 0,
+	    "transmit with eighth-bit escaping");
+	passed = expect(sending_io.output_length >= 4U,
+	    "eighth-bit escaped wire length") && passed;
+	passed = expect(sending_io.output[0] == ZDLE &&
+	    sending_io.output[1] == (uint8_t)(payload[0] ^ 0x40U) &&
+	    sending_io.output[2] == ZDLE &&
+	    sending_io.output[3] == (uint8_t)(payload[1] ^ 0x40U),
+	    "eighth-bit escaped wire bytes") && passed;
+
+	initialize(&receiver,&receiving_io);
+	receiver.receive_escaped_8th_bit = true;
+	(void)memcpy(receiving_io.input,sending_io.output,
+	    sending_io.output_length);
+	receiving_io.input_length = sending_io.output_length;
+	passed = expect(rx_data(&receiver,received,sizeof(received),&length,
+	    &frame_end) == ENDOFFRAME,"receive eighth-bit escaped packet") &&
+	    passed;
+	passed = expect(length == sizeof(payload),
+	    "eighth-bit escaped packet length") && passed;
+	passed = expect(frame_end == ZCRCE,
+	    "eighth-bit escaped packet terminator") && passed;
+	passed = expect(memcmp(received,payload,sizeof(payload)) == 0,
+	    "eighth-bit escaped packet payload") && passed;
+	return passed;
+}
+
+static bool
 test_data_read_failures(bool use_crc32)
 {
 	static const uint8_t payload[] = { 1U,2U,3U };
@@ -473,6 +520,7 @@ test_data_packets(void)
 	passed = data_round_trip(false,false,ZCRCE,ENDOFFRAME) && passed;
 	passed = data_round_trip(false,false,ZCRCG,FRAMEOK) && passed;
 	passed = data_round_trip(false,false,ZCRCQ,FRAMEOK) && passed;
+	passed = test_eighth_bit_escaping() && passed;
 	passed = test_data_read_failures(false) && passed;
 	passed = test_data_read_failures(true) && passed;
 	passed = test_receive_escape_variants() && passed;

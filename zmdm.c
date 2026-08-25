@@ -75,7 +75,8 @@ enum tx_class {
 	TX_NORMAL = 0,
 	TX_ESCAPE_ALWAYS = 1,
 	TX_ESCAPE_CONTROL = 2,
-	TX_ESCAPE_CR = 4
+	TX_ESCAPE_CR = 4,
+	TX_ESCAPE_8TH = 8
 };
 
 int
@@ -141,19 +142,25 @@ initialize_tx_classes(struct zmodem * zmodem)
 	unsigned c;
 
 	for (c=0;c<256;c++) {
+		unsigned action;
+
 		if (c == ZDLE || c == 0x10 || c == 0x90 || c == XON ||
 		    c == 0x91 || c == XOFF || c == 0x93) {
-			zmodem->tx_classes[c] = TX_ESCAPE_ALWAYS;
+			action = TX_ESCAPE_ALWAYS;
 		}
 		else if (c == CR || c == 0x8d) {
-			zmodem->tx_classes[c] = TX_ESCAPE_CR;
+			action = TX_ESCAPE_CR;
 		}
 		else if ((c & 0x60) == 0) {
-			zmodem->tx_classes[c] = TX_ESCAPE_CONTROL;
+			action = TX_ESCAPE_CONTROL;
 		}
 		else {
-			zmodem->tx_classes[c] = TX_NORMAL;
+			action = TX_NORMAL;
 		}
+		if ((c & 0x80) != 0) {
+			action |= TX_ESCAPE_8TH;
+		}
+		zmodem->tx_classes[c] = (uint8_t)action;
 	}
 	zmodem->tx_classes_initialized = true;
 }
@@ -167,7 +174,8 @@ active_tx_classes(struct zmodem * zmodem)
 	}
 	return TX_ESCAPE_ALWAYS |
 	    (zmodem->escape_all_control_characters ?
-	    TX_ESCAPE_CONTROL | TX_ESCAPE_CR : 0U);
+	    TX_ESCAPE_CONTROL | TX_ESCAPE_CR : 0U) |
+	    (zmodem->escape_8th_bit ? TX_ESCAPE_8TH : 0U);
 }
 
 static bool
@@ -406,7 +414,7 @@ tx_copy_plain_span(const uint8_t * classes,uint8_t * output,
 		span += sizeof(word);
 	}
 	while ((span < length) &&
-	    (classes[data[span]] != TX_ESCAPE_ALWAYS)) {
+	    (((unsigned)classes[data[span]] & TX_ESCAPE_ALWAYS) == 0U)) {
 		output[span] = data[span];
 		span += 1U;
 	}
@@ -669,6 +677,15 @@ rx_slow(struct zmodem * zmodem,int timeout_ms,int c)
 			c = rx_raw(zmodem,timeout_ms);
 			if (c < 0) {
 				return c;
+			}
+			/*
+			 * ESC8 quotes every high-bit byte.  Decode its quoted form
+			 * before discarding high-bit XON and XOFF values, which can
+			 * legitimately represent 0xd1 and 0xd3 here.
+			 */
+			if (zmodem->receive_escaped_8th_bit &&
+			    (c & 0x80) != 0) {
+				return c ^ 0x40;
 			}
 
 			if (rx_needs_slow_path(c)) {

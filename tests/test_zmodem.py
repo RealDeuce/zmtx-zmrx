@@ -26,6 +26,7 @@ ZVBIN32 = 0x63
 XON = 0x11
 ZRQINIT = 0
 ZRINIT = 1
+ZSINIT = 2
 ZACK = 3
 ZFILE = 4
 ZSKIP = 5
@@ -39,6 +40,8 @@ ZCOMPL = 15
 ZF1_ZMCLOB = 4
 ZF1_ZMNEW = 5
 ZF1_ZMPROT = 7
+ZF0_ESCCTL = 0x40
+ZF0_ESC8 = 0x80
 ZCRCE = 0x68
 ZCRCG = 0x69
 ZCRCQ = 0x6A
@@ -166,33 +169,45 @@ class Peer:
         self.use_crc32 = style in (ZBIN32, ZVBIN32)
         return header[0], int.from_bytes(header[1:], "little"), header
 
-    def _data_byte(self):
+    def _data_byte(self, *, require_escaped_8th=False):
         value = self.byte()
+        if require_escaped_8th and value & 0x80:
+            raise AssertionError(f"unescaped eighth-bit byte {value:#x}")
         while value in (XON, 0x91, 0x13, 0x93):
             value = self.byte()
+            if require_escaped_8th and value & 0x80:
+                raise AssertionError(
+                    f"unescaped eighth-bit byte {value:#x}")
         if value != ZDLE:
             return value
         value = self.byte()
+        if require_escaped_8th and value & 0x80:
+            return value ^ 0x40
         while value in (XON, 0x91, 0x13, 0x93, ZDLE):
             value = self.byte()
         if value == 0x6C:
             return 0x7F
         if value == 0x6D:
             return 0xFF
-        if value & 0x60 == 0x40:
+        if value & 0x80 or value & 0x60 == 0x40:
             return value ^ 0x40
         raise AssertionError(f"unexpected ZDLE sequence {value:#x}")
 
-    def data(self):
+    def data(self, *, require_escaped_8th=False):
         payload = bytearray()
         while True:
             value = self.byte()
+            if require_escaped_8th and value & 0x80:
+                raise AssertionError(f"unescaped eighth-bit byte {value:#x}")
             if value in (XON, 0x91, 0x13, 0x93):
                 continue
             if value != ZDLE:
                 payload.append(value)
                 continue
             value = self.byte()
+            if require_escaped_8th and value & 0x80:
+                payload.append(value ^ 0x40)
+                continue
             while value in (XON, 0x91, 0x13, 0x93, ZDLE):
                 value = self.byte()
             if value in (ZCRCE, ZCRCG, ZCRCQ, ZCRCW):
@@ -208,14 +223,21 @@ class Peer:
                 raise AssertionError(f"unexpected ZDLE sequence {value:#x}")
         if self.use_crc32:
             received_crc = int.from_bytes(
-                bytes(self._data_byte() for _ in range(4)), "little")
+                bytes(self._data_byte(
+                    require_escaped_8th=require_escaped_8th)
+                    for _ in range(4)), "little")
             expected_crc = zlib.crc32(bytes(payload) + bytes((frame_end,))) \
                 & 0xFFFFFFFF
         else:
-            received_crc = (self._data_byte() << 8) | self._data_byte()
+            received_crc = self._data_byte(
+                require_escaped_8th=require_escaped_8th) << 8
+            received_crc |= self._data_byte(
+                require_escaped_8th=require_escaped_8th)
             expected_crc = crc16(bytes(payload) + bytes((frame_end,)))
         if received_crc != expected_crc:
-            raise AssertionError("bad CRC in received data subpacket")
+            raise AssertionError(
+                f"bad CRC in received data subpacket: "
+                f"received {received_crc:#x}, expected {expected_crc:#x}")
         if frame_end == ZCRCW and self.byte() != XON:
             raise AssertionError("missing XON after ZCRCW subpacket")
         return bytes(payload), frame_end
@@ -274,8 +296,9 @@ class ZmodemTests(unittest.TestCase):
         )
         local.close()
         peer = Peer(remote)
-        frame_type, _, _ = peer.header()
+        frame_type, _, header = peer.header()
         self.assertEqual(frame_type, ZRINIT)
+        peer.initial_header = header
         return process, peer
 
     def begin_sender(self, cwd, name, *options, flags=3, buffer_size=0,
@@ -294,7 +317,7 @@ class ZmodemTests(unittest.TestCase):
         peer.send(hex_header(ZRINIT, header=zrinit))
         frame_type, _, _ = peer.header()
         self.assertEqual(frame_type, ZFILE)
-        peer.data()
+        peer.data(require_escaped_8th=bool(flags & ZF0_ESC8))
         return process, peer, zrinit
 
     def start_sender(self, cwd, name, *options, flags=3, buffer_size=0,
@@ -428,34 +451,38 @@ class ZmodemTests(unittest.TestCase):
 
     def test_sender_preserves_all_bytes_with_negotiated_escaping(self):
         for escape_control in (False, True):
-            with self.subTest(escape_control=escape_control), \
+            for escape_8th in (False, True):
+                with self.subTest(escape_control=escape_control,
+                                  escape_8th=escape_8th), \
                     tempfile.TemporaryDirectory() as temporary:
-                byte_cases = b"".join(
-                    bytes((ord("@"), value, ord("A"), value))
-                    for value in range(256)
-                )
-                payload = byte_cases * 20 + b"sentinel"
-                source = Path(temporary) / "escaping.bin"
-                source.write_bytes(payload)
-                flags = 3 | (0x40 if escape_control else 0)
-                process, peer, zrinit = self.start_sender(
-                    temporary, source.name, "-8", flags=flags)
-                try:
-                    frame_type, position, _ = peer.header()
-                    self.assertEqual((frame_type, position), (ZDATA, 0))
-                    received = bytearray()
-                    frame_end = ZCRCG
-                    while frame_end == ZCRCG:
-                        chunk, frame_end = peer.data()
-                        received.extend(chunk)
-                    self.assertEqual(
-                        (bytes(received), frame_end), (payload, ZCRCE))
-                    self.finish_sender(peer, process, zrinit, len(payload))
-                finally:
-                    peer.sock.close()
-                    if process.poll() is None:
-                        process.kill()
-                        process.wait()
+                    byte_cases = b"".join(
+                        bytes((ord("@"), value, ord("A"), value))
+                        for value in range(256)
+                    )
+                    payload = byte_cases * 20 + b"sentinel"
+                    source = Path(temporary) / "escaping.bin"
+                    source.write_bytes(payload)
+                    flags = 3 | (0x40 if escape_control else 0) | \
+                        (0x80 if escape_8th else 0)
+                    process, peer, zrinit = self.start_sender(
+                        temporary, source.name, "-8", flags=flags)
+                    try:
+                        frame_type, position, _ = peer.header()
+                        self.assertEqual((frame_type, position), (ZDATA, 0))
+                        received = bytearray()
+                        frame_end = ZCRCG
+                        while frame_end == ZCRCG:
+                            chunk, frame_end = peer.data(
+                                require_escaped_8th=escape_8th)
+                            received.extend(chunk)
+                        self.assertEqual(
+                            (bytes(received), frame_end), (payload, ZCRCE))
+                        self.finish_sender(peer, process, zrinit, len(payload))
+                    finally:
+                        peer.sock.close()
+                        if process.poll() is None:
+                            process.kill()
+                            process.wait()
 
     def test_sender_debug_capability_reporting(self):
         management_options = (
@@ -516,6 +543,72 @@ class ZmodemTests(unittest.TestCase):
                 if process.poll() is None:
                     process.kill()
                     process.wait()
+
+    def test_receiver_advertises_requested_escaping(self):
+        cases = (
+            (("-e",), ZF0_ESCCTL),
+            (("-b",), ZF0_ESC8),
+            (("-eb",), ZF0_ESCCTL | ZF0_ESC8),
+        )
+        for options, expected in cases:
+            with self.subTest(options=options), \
+                    tempfile.TemporaryDirectory() as temporary:
+                process, peer = self.start_receiver(temporary, *options)
+                try:
+                    self.assertEqual(
+                        peer.initial_header[4] & (ZF0_ESCCTL | ZF0_ESC8),
+                        expected)
+                    returncode, stderr = finish_receiver(peer, process)
+                    self.assertEqual(
+                        returncode, 0, stderr.decode(errors="replace"))
+                finally:
+                    peer.sock.close()
+                    if process.poll() is None:
+                        process.kill()
+                        process.wait()
+
+    def test_receiver_acknowledges_sender_initialization(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            process, peer = self.start_receiver(temporary)
+            try:
+                flags = ZF0_ESCCTL | ZF0_ESC8
+                header = bytes((ZSINIT, 0, 0, 0, flags))
+                peer.send(hex_header(ZSINIT, header=header) +
+                          data_subpacket(b"attention\0", ZCRCW))
+                frame_type, position, _ = peer.header()
+                self.assertEqual((frame_type, position), (ZACK, 0))
+                returncode, stderr = finish_receiver(peer, process)
+                self.assertEqual(
+                    returncode, 0, stderr.decode(errors="replace"))
+            finally:
+                peer.sock.close()
+                if process.poll() is None:
+                    process.kill()
+                    process.wait()
+
+    def test_receiver_rejects_malformed_sender_initialization(self):
+        cases = (
+            (b"unterminated", ZCRCW),
+            (b"attention\0", ZCRCE),
+            (b"a" * 33, ZCRCW),
+        )
+        for attention, frame_end in cases:
+            with self.subTest(length=len(attention), frame_end=frame_end), \
+                    tempfile.TemporaryDirectory() as temporary:
+                process, peer = self.start_receiver(temporary)
+                try:
+                    peer.send(hex_header(ZSINIT) +
+                              data_subpacket(attention, frame_end))
+                    frame_type, position, _ = peer.header()
+                    self.assertEqual((frame_type, position), (ZNAK, 0))
+                    returncode, stderr = finish_receiver(peer, process)
+                    self.assertEqual(
+                        returncode, 0, stderr.decode(errors="replace"))
+                finally:
+                    peer.sock.close()
+                    if process.poll() is None:
+                        process.kill()
+                        process.wait()
 
     def test_receiver_handles_session_control_headers(self):
         with tempfile.TemporaryDirectory() as temporary:

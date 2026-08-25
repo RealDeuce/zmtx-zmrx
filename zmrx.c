@@ -75,8 +75,11 @@ static bool opt_v = false;				/* show progress output */
 static bool opt_d = false;				/* show debug output */
 static bool opt_q = false;
 static bool opt_s = false;
+static bool opt_escape_control = false;
+static bool opt_escape_8th_bit = false;
 static bool junk_pathnames = false;			/* junk incoming path names or keep them */
 static uint8_t rx_data_subpacket[ZMAXSPLEN];
+static uint8_t attention_sequence[ZATTNLEN];
 
 static uintmax_t current_file_size;
 static bool current_file_size_known;
@@ -387,8 +390,42 @@ tx_zrinit(void)
 		zrinit_header[ZP1] = (uint8_t)(ZMAXSPLEN >> 8);
 		zrinit_header[ZF0] &= (uint8_t)~ZF0_CANOVIO;
 	}
+	if (opt_escape_control) {
+		zrinit_header[ZF0] |= ZF0_ESCCTL;
+	}
+	if (opt_escape_8th_bit) {
+		zrinit_header[ZF0] |= ZF0_ESC8;
+		protocol.receive_escaped_8th_bit = true;
+	}
 
 	return tx_hex_header(&protocol,zrinit_header);
+}
+
+static int
+receive_sender_init(void)
+
+{
+	uint8_t frame_end;
+	uint8_t flags = protocol.rxd_header[ZF0];
+	size_t length;
+	int result;
+
+	protocol.escape_all_control_characters =
+	    (flags & ZF0_TESCCTL) != 0U;
+	protocol.escape_8th_bit = (flags & ZF0_TESC8) != 0U;
+	result = rx_data(&protocol,attention_sequence,sizeof(attention_sequence),
+	    &length,&frame_end);
+	if (terminal_receive_result(result)) {
+		return result;
+	}
+	if ((result != ENDOFFRAME) || (frame_end != ZCRCW) ||
+	    (length == 0U) ||
+	    (memchr(attention_sequence,'\0',length) !=
+	    &attention_sequence[length - 1U])) {
+		return tx_znak(&protocol) == 0 ? ZNAK : ZMODEM_IO_ERROR;
+	}
+	return tx_pos_header(&protocol,ZACK,UINT32_C(0)) == 0 ?
+	    ZACK : ZMODEM_IO_ERROR;
 }
 
 static bool
@@ -862,6 +899,8 @@ usage(void)
 	(void)printf("	-v          verbose output\n");
 	(void)printf("	-q          quiet\n");
 	(void)printf("	-s          request non-streaming transfers\n");
+	(void)printf("	-e          request control-character escaping\n");
+	(void)printf("	-b          request high-bit-byte escaping\n");
 	(void)printf("	(only one of -n -c or -p may be specified)\n");
 
 	exit(cleanup(1));
@@ -897,6 +936,9 @@ main(int argc,char ** argv)
 			int option = toupper((unsigned char)argument[option_index]);
 
 			switch (option) {
+				case 'B':
+					opt_escape_8th_bit = true;
+					break;
 				case 'D':
 					opt_d = true;
 					break;
@@ -908,6 +950,9 @@ main(int argc,char ** argv)
 					break;
 				case 'S':
 					opt_s = true;
+					break;
+				case 'E':
+					opt_escape_control = true;
 					break;
 				case 'N':
 					protocol.management_newer = true;
@@ -1029,7 +1074,17 @@ main(int argc,char ** argv)
 			break;
 		}
 
-		if (type == ZFILE) {
+		if (type == ZSINIT) {
+			int result = receive_sender_init();
+
+			if (result < 0) {
+				report_receiver_protocol("can't receive sender initialization",
+				    result);
+				transfer_failed = true;
+				break;
+			}
+		}
+		else if (type == ZFILE) {
 			enum receive_result result = receive_file();
 
 			if (result == RECEIVE_FAILED) {
