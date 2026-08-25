@@ -374,6 +374,45 @@ buffer_tx(struct zmodem * restrict zmodem,uint8_t c,
 	}
 }
 
+static inline size_t
+tx_copy_plain_span(const uint8_t * classes,uint8_t * output,
+    const uint8_t * data,size_t length)
+
+{
+	const uint64_t ones = UINT64_C(0x0101010101010101);
+	const uint64_t highs = UINT64_C(0x8080808080808080);
+	size_t span = 0U;
+
+	while (length - span >= sizeof(uint64_t)) {
+		uint64_t word;
+		uint64_t zdle;
+		uint64_t control;
+		uint64_t flow;
+
+		/* Find mandatory escapes while copying eight plain bytes at once. */
+		(void)memcpy(&word,&data[span],sizeof(word));
+		zdle = word ^ UINT64_C(0x1818181818181818);
+		/* 0x10/0x90 share seven bits; flow controls vary in bits 1 and 7. */
+		control = (word & UINT64_C(0x7f7f7f7f7f7f7f7f)) ^
+		    UINT64_C(0x1010101010101010);
+		flow = (word & UINT64_C(0x7d7d7d7d7d7d7d7d)) ^
+		    UINT64_C(0x1111111111111111);
+		if ((((zdle - ones) & ~zdle & highs) |
+		    ((control - ones) & ~control & highs) |
+		    ((flow - ones) & ~flow & highs)) != 0U) {
+			break;
+		}
+		(void)memcpy(&output[span],&word,sizeof(word));
+		span += sizeof(word);
+	}
+	while ((span < length) &&
+	    (classes[data[span]] != TX_ESCAPE_ALWAYS)) {
+		output[span] = data[span];
+		span += 1U;
+	}
+	return span;
+}
+
 int
 tx_data(struct zmodem * restrict zmodem,uint8_t sub_frame_type,
     const uint8_t * restrict p,size_t l)
@@ -388,15 +427,18 @@ tx_data(struct zmodem * restrict zmodem,uint8_t sub_frame_type,
 		return -1;
 	}
 	if (active == TX_ESCAPE_ALWAYS) {
-		for (i=0;i<l;i++) {
-			uint8_t c = p[i];
+		for (i=0;i<l;) {
+			size_t span = tx_copy_plain_span(zmodem->tx_classes,
+			    &zmodem->tx_data_wire[used],&p[i],l - i);
 
-			if (zmodem->tx_classes[c] == TX_ESCAPE_ALWAYS) {
-				buffer_raw(zmodem,ZDLE,&used,&previous);
-				buffer_raw(zmodem,(uint8_t)(c ^ 0x40),&used,&previous);
-			}
-			else {
-				buffer_raw(zmodem,c,&used,&previous);
+			i += span;
+			used += span;
+			if (i < l) {
+				zmodem->tx_data_wire[used] = ZDLE;
+				zmodem->tx_data_wire[used + 1U] =
+				    (uint8_t)(p[i] ^ 0x40);
+				used += 2U;
+				i += 1U;
 			}
 		}
 	}

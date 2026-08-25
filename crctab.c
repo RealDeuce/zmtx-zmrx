@@ -110,7 +110,7 @@ const uint32_t crc32tab[] = { /* CRC polynomial 0xedb88320 */
 };
 
 /*
- * Additional slicing-by-4 tables derived from crc32tab.  Each successive
+ * Additional slicing-by-8 tables derived from crc32tab.  Each successive
  * table advances the CRC state through one more zero byte.  Generating them
  * from the existing reflected IEEE CRC-32 table keeps the relationship
  * explicit and avoids importing another implementation or table source.
@@ -148,17 +148,21 @@ uint32_t
 crc32_update(uint32_t crc,const uint8_t * data,size_t length)
 
 {
-	while (length >= 4) {
+	while (length >= 8) {
 		crc ^= (uint32_t)data[0] |
 		    ((uint32_t)data[1] << 8) |
 		    ((uint32_t)data[2] << 16) |
 		    ((uint32_t)data[3] << 24);
-		crc = crc32_slicing[2][crc & UINT32_C(0xff)] ^
-		    crc32_slicing[1][(crc >> 8) & UINT32_C(0xff)] ^
-		    crc32_slicing[0][(crc >> 16) & UINT32_C(0xff)] ^
-		    crc32tab[crc >> 24];
-		data += 4;
-		length -= 4;
+		crc = crc32_slicing[6][crc & UINT32_C(0xff)] ^
+		    crc32_slicing[5][(crc >> 8) & UINT32_C(0xff)] ^
+		    crc32_slicing[4][(crc >> 16) & UINT32_C(0xff)] ^
+		    crc32_slicing[3][crc >> 24] ^
+		    crc32_slicing[2][data[4]] ^
+		    crc32_slicing[1][data[5]] ^
+		    crc32_slicing[0][data[6]] ^
+		    crc32tab[data[7]];
+		data += 8;
+		length -= 8;
 	}
 	while (length-- > 0) {
 		crc = crc32_byte_update(crc,*data);
