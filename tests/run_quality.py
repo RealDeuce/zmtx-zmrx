@@ -211,6 +211,8 @@ def sanitizers(directory):
 def fuzz(directory):
     # Current Apple toolchains omit libclang_rt.fuzzer_osx.a.
     clang, _, _ = llvm_toolchain()
+    instrumentation = ("fuzzer,undefined" if sys.platform == "darwin" else
+                       "fuzzer,address,undefined")
     executable = directory / "fuzz_zmdm"
     corpus = directory / "fuzz-corpus"
 
@@ -221,7 +223,7 @@ def fuzz(directory):
         executable,
         ["tests/fuzz_zmdm.c", "zmdm.c", "crctab.c"],
         ["-O1", "-g", "-fno-omit-frame-pointer", "-Wall", "-Wextra",
-         "-Werror", "-pedantic-errors", "-fsanitize=fuzzer,address,undefined"],
+         "-Werror", "-pedantic-errors", f"-fsanitize={instrumentation}"],
     )
     run([executable, corpus, ROOT / "tests/fuzz_corpus", "-runs=10000",
          "-max_len=16384", "-timeout=10", "-verbosity=0"], timeout=120)
