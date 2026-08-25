@@ -82,6 +82,36 @@ static uintmax_t current_file_size;
 static bool current_file_size_known;
 static struct timespec transfer_start;
 static bool transfer_clock_started;
+static bool receive_error_reported;
+
+static void
+report_receiver_errno(const char * operation,const char * name,int error)
+{
+	if (!opt_q) {
+		(void)fprintf(stderr,"zmrx: %s %s: %s\n",operation,name,
+		    strerror(error));
+	}
+	receive_error_reported = true;
+}
+
+static void
+report_receiver_protocol(const char * operation,int result)
+{
+	if (!opt_q) {
+		(void)fprintf(stderr,"zmrx: %s: %s\n",operation,
+		    zmodem_result_description(result));
+	}
+	receive_error_reported = true;
+}
+
+static void
+report_receiver_file(const char * operation,const char * name)
+{
+	if (!opt_q) {
+		(void)fprintf(stderr,"zmrx: %s: %s\n",operation,name);
+	}
+	receive_error_reported = true;
+}
 
 static uintmax_t
 elapsed_seconds(void)
@@ -191,10 +221,15 @@ receive_file_data(char * name,FILE * fp)
 	int type;
 
 	if (!file_position(fp,&pos)) {
+		int error = errno;
+
 		(void)tx_pos_header(&protocol,ZFERR,UINT32_C(0));
+		report_receiver_errno("can't determine file position for",name,error);
 		return ZFERR;
 	}
 	if (tx_pos_header(&protocol,ZRPOS,pos) != 0) {
+		report_receiver_protocol("can't request file data",
+		    ZMODEM_IO_ERROR);
 		return ZFERR;
 	}
 
@@ -206,6 +241,8 @@ receive_file_data(char * name,FILE * fp)
 				return TIMEOUT;
 			}
 			if (tx_pos_header(&protocol,ZRPOS,pos) != 0) {
+				report_receiver_protocol("can't retry file data",
+				    ZMODEM_IO_ERROR);
 				return TIMEOUT;
 			}
 			continue;
@@ -225,6 +262,8 @@ receive_file_data(char * name,FILE * fp)
 				return data_result;
 			}
 			if (tx_pos_header(&protocol,ZRPOS,pos) != 0) {
+				report_receiver_protocol("can't resume file data",
+				    ZMODEM_IO_ERROR);
 				return ZFERR;
 			}
 			continue;
@@ -234,6 +273,8 @@ receive_file_data(char * name,FILE * fp)
 		}
 		if (zmodem_header_position(protocol.rxd_header) != pos) {
 			if (rx_purge(&protocol) != ZMODEM_OK) {
+				report_receiver_protocol("can't purge transfer input",
+				    ZMODEM_IO_ERROR);
 				return ZMODEM_IO_ERROR;
 			}
 			errors += 1U;
@@ -241,6 +282,8 @@ receive_file_data(char * name,FILE * fp)
 				return INVDATA;
 			}
 			if (tx_pos_header(&protocol,ZRPOS,pos) != 0) {
+				report_receiver_protocol("can't request corrected file position",
+				    ZMODEM_IO_ERROR);
 				return INVDATA;
 			}
 			continue;
@@ -258,6 +301,9 @@ receive_file_data(char * name,FILE * fp)
 			if (type != FRAMEOK) {
 				if (type != ENDOFFRAME) {
 					if (rx_purge(&protocol) != ZMODEM_OK) {
+						report_receiver_protocol(
+						    "can't purge invalid file data",
+						    ZMODEM_IO_ERROR);
 						return ZMODEM_IO_ERROR;
 					}
 					errors += 1U;
@@ -265,6 +311,9 @@ receive_file_data(char * name,FILE * fp)
 						return type;
 					}
 					if (tx_pos_header(&protocol,ZRPOS,pos) != 0) {
+						report_receiver_protocol(
+						    "can't request retransmission",
+						    ZMODEM_IO_ERROR);
 						return type;
 					}
 					break;
@@ -272,22 +321,34 @@ receive_file_data(char * name,FILE * fp)
 			}
 			if (n > UINT32_MAX) {
 				(void)tx_pos_header(&protocol,ZFERR,pos);
+				report_receiver_protocol("file block exceeds ZMODEM limit",
+				    ZMODEM_INVALID_DATA);
 				return ZFERR;
 			}
 			if (pos > UINT32_MAX - (uint32_t)n) {
 				(void)tx_pos_header(&protocol,ZFERR,pos);
+				report_receiver_protocol("file position exceeds ZMODEM limit",
+				    ZMODEM_INVALID_DATA);
 				return ZFERR;
 			}
 			if (fwrite(rx_data_subpacket,1,n,fp) != n) {
+				int error = errno != 0 ? errno : EIO;
+
 				(void)tx_pos_header(&protocol,ZFERR,pos);
+				report_receiver_errno("can't write file",name,error);
 				return ZFERR;
 			}
 			if (!file_position(fp,&new_pos)) {
+				int error = errno;
+
 				(void)tx_pos_header(&protocol,ZFERR,pos);
+				report_receiver_errno("can't determine file position for",name,
+				    error);
 				return ZFERR;
 			}
 			if (new_pos != pos + (uint32_t)n) {
 				(void)tx_pos_header(&protocol,ZFERR,pos);
+				report_receiver_file("unexpected local file position",name);
 				return ZFERR;
 			}
 			pos = new_pos;
@@ -301,6 +362,8 @@ receive_file_data(char * name,FILE * fp)
 				}
 				if (send_acknowledgement) {
 					if (tx_pos_header(&protocol,ZACK,pos) != 0) {
+						report_receiver_protocol("can't acknowledge file data",
+						    ZMODEM_IO_ERROR);
 						return ZFERR;
 				}
 			}
@@ -407,6 +470,8 @@ receive_file(void)
 	uint8_t * pathname_end;
 	bool management_selected = false;
 
+	receive_error_reported = false;
+
 	mdate_known = false;
 	current_file_size = 0;
 	current_file_size_known = false;
@@ -462,6 +527,7 @@ receive_file(void)
 	    &frame_end);
 
 	if (terminal_receive_result(type)) {
+		report_receiver_protocol("can't receive file information",type);
 		return RECEIVE_FAILED;
 	}
 	if (type != ENDOFFRAME) {
@@ -568,10 +634,10 @@ receive_file(void)
 	}
 	else {
 		if (errno != ENOENT) {
+			int error = errno;
+
 			(void)tx_pos_header(&protocol,ZFERR,UINT32_C(0));
-			if (opt_v) {
-				(void)fprintf(stderr,"zmrx: can't inspect file %s\n",name);
-			}
+			report_receiver_errno("can't inspect file",name,error);
 			return RECEIVE_FAILED;
 		}
 	}
@@ -673,10 +739,10 @@ receive_file(void)
 	fp = received_file;
 
 	if (received_file == NULL) {
+		int error = errno;
+
 		(void)tx_pos_header(&protocol,ZFERR,UINT32_C(0));
-		if (opt_v) {
-			(void)fprintf(stderr,"zmrx: can't open file %s\n",name);
-		}
+		report_receiver_errno("can't open file",name,error);
 		return RECEIVE_FAILED;
 	}
 
@@ -689,12 +755,18 @@ receive_file(void)
 		}
 		(void)fclose(received_file);
 		fp = NULL;
+		if (!receive_error_reported) {
+			report_receiver_protocol("file-data transfer failed",type);
+		}
 		return RECEIVE_FAILED;
 	}
 	if (!file_position(received_file,&position)) {
+		int error = errno;
+
 		(void)tx_pos_header(&protocol,ZFERR,UINT32_C(0));
 		(void)fclose(received_file);
 		fp = NULL;
+		report_receiver_errno("can't determine file position for",name,error);
 		return RECEIVE_FAILED;
 	}
 
@@ -703,14 +775,20 @@ receive_file(void)
 	 */
 
 	if (fflush(received_file) != 0) {
+		int error = errno;
+
 		(void)tx_pos_header(&protocol,ZFERR,position);
 		(void)fclose(received_file);
 		fp = NULL;
+		report_receiver_errno("can't flush file",name,error);
 		return RECEIVE_FAILED;
 	}
 	if (fclose(received_file) != 0) {
+		int error = errno;
+
 		fp = NULL;
 		(void)tx_pos_header(&protocol,ZFERR,position);
+		report_receiver_errno("can't close file",name,error);
 		return RECEIVE_FAILED;
 	}
 	fp = NULL;
@@ -924,7 +1002,7 @@ main(int argc,char ** argv)
 		type = rx_header(&protocol,7000);
 	} while (type == TIMEOUT || type == ZRQINIT);
 	if (type < 0) {
-		(void)fprintf(stderr,"zmrx: input error establishing contact\n");
+		report_receiver_protocol("input error establishing contact",type);
 		return cleanup(3);
 	}
 
@@ -946,6 +1024,7 @@ main(int argc,char ** argv)
 			break;
 		}
 		if (type < 0) {
+			report_receiver_protocol("file-session input failed",type);
 			transfer_failed = true;
 			break;
 		}
@@ -954,6 +1033,9 @@ main(int argc,char ** argv)
 			enum receive_result result = receive_file();
 
 			if (result == RECEIVE_FAILED) {
+				if (!receive_error_reported) {
+					report_receiver_file("file transfer failed",filename);
+				}
 				transfer_failed = true;
 				break;
 			}
@@ -963,6 +1045,8 @@ main(int argc,char ** argv)
 			invite = true;
 		}
 		else if (tx_pos_header(&protocol,ZCOMPL,UINT32_C(0)) != 0) {
+			report_receiver_protocol("can't acknowledge session request",
+			    ZMODEM_IO_ERROR);
 			transfer_failed = true;
 			break;
 		}
@@ -970,6 +1054,8 @@ main(int argc,char ** argv)
 		type = TIMEOUT;
 		for (attempts=0;attempts<MAX_RETRIES;attempts++) {
 			if (invite && tx_zrinit() != 0) {
+				report_receiver_protocol("can't invite next file",
+				    ZMODEM_IO_ERROR);
 				transfer_failed = true;
 				break;
 			}
@@ -980,6 +1066,7 @@ main(int argc,char ** argv)
 			invite = true;
 		}
 		if (type == TIMEOUT) {
+			report_receiver_protocol("waiting for next file",TIMEOUT);
 			transfer_failed = true;
 		}
 	}
@@ -996,6 +1083,10 @@ main(int argc,char ** argv)
 		uint8_t zfin_header[] = { ZFIN, 0, 0, 0, 0 };
 
 		if (tx_hex_header(&protocol,zfin_header) != 0) {
+			if (!transfer_failed) {
+				report_receiver_protocol("can't close session",
+				    ZMODEM_IO_ERROR);
+			}
 			transfer_failed = true;
 		}
 	}
@@ -1016,6 +1107,9 @@ main(int argc,char ** argv)
 			} while (c >= 0 && c != 'O');
 		}
 		if (c != 'O') {
+			if (!transfer_failed) {
+				report_receiver_protocol("waiting for session completion",c);
+			}
 			transfer_failed = true;
 		}
 	}

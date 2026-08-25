@@ -77,6 +77,30 @@ static uint8_t tx_data_subpacket[ZMAXSPLEN];
 static off_t current_file_size;
 static struct timespec transfer_start;
 static bool transfer_clock_started;
+static bool send_error_reported;
+
+static void
+report_sender_errno(const char * operation,const char * name,int error)
+{
+	(void)fprintf(stderr,"zmtx: %s %s: %s\n",operation,name,
+	    strerror(error));
+	send_error_reported = true;
+}
+
+static void
+report_sender_protocol(const char * operation,int result)
+{
+	(void)fprintf(stderr,"zmtx: %s: %s\n",operation,
+	    zmodem_result_description(result));
+	send_error_reported = true;
+}
+
+static void
+report_sender_file(const char * operation,const char * name)
+{
+	(void)fprintf(stderr,"zmtx: %s: %s\n",operation,name);
+	send_error_reported = true;
+}
 
 static uintmax_t
 elapsed_seconds(void)
@@ -327,12 +351,15 @@ send_from(const char * name,int file_fd)
 	uint8_t zdata_frame[] = { ZDATA, 0, 0, 0, 0 };
 
 	if (!file_position(file_fd,&position)) {
+		report_sender_errno("can't determine file position for",name,errno);
 		return ZFERR;
 	}
 	if (position < 0) {
+		report_sender_file("invalid file position",name);
 		return ZFERR;
 	}
 	if ((uintmax_t)position > UINT32_MAX) {
+		report_sender_file("file position exceeds ZMODEM limit",name);
 		return ZFERR;
 	}
 	acknowledged_position = (uint32_t)position;
@@ -346,12 +373,16 @@ send_from(const char * name,int file_fd)
 		uint32_t wire_position;
 
 		if (!file_position(file_fd,&position)) {
+			report_sender_errno("can't determine file position for",name,
+			    errno);
 			return ZFERR;
 		}
 		if (position < 0) {
+			report_sender_file("invalid file position",name);
 			return ZFERR;
 		}
 		if ((uintmax_t)position > UINT32_MAX) {
+			report_sender_file("file position exceeds ZMODEM limit",name);
 			return ZFERR;
 		}
 		wire_position = (uint32_t)position;
@@ -372,6 +403,8 @@ send_from(const char * name,int file_fd)
 		if (!frame_open) {
 			zmodem_set_header_position(zdata_frame,wire_position);
 			if (tx_header(&protocol,zdata_frame) != 0) {
+				report_sender_protocol("can't send file-data header",
+				    ZMODEM_IO_ERROR);
 				return ZFERR;
 			}
 			frame_open = true;
@@ -399,15 +432,20 @@ send_from(const char * name,int file_fd)
 		}
 		if (!read_file_block(file_fd,tx_data_subpacket,read_size,&n,
 		    &end_of_file)) {
+			int error = errno;
+
 			(void)tx_pos_header(&protocol,ZFERR,wire_position);
+			report_sender_errno("can't read file",name,error);
 			return ZFERR;
 		}
 		if (n > UINT32_MAX) {
 			(void)tx_pos_header(&protocol,ZFERR,wire_position);
+			report_sender_file("file block exceeds ZMODEM limit",name);
 			return ZFERR;
 		}
 		if (wire_position > UINT32_MAX - (uint32_t)n) {
 			(void)tx_pos_header(&protocol,ZFERR,wire_position);
+			report_sender_file("file position exceeds ZMODEM limit",name);
 			return ZFERR;
 		}
 		position += (off_t)n;
@@ -428,6 +466,8 @@ send_from(const char * name,int file_fd)
 			frame_end = ZCRCG;
 		}
 		if (tx_data(&protocol,frame_end,tx_data_subpacket,n) != 0) {
+			report_sender_protocol("can't send file data",
+			    ZMODEM_IO_ERROR);
 			return ZFERR;
 		}
 		if (frame_end == ZCRCE) {
@@ -555,6 +595,8 @@ send_file(const char * name)
 	int written;
 	const char * n;
 
+	send_error_reported = false;
+
 	if (opt_v) {
 		(void)fprintf(stderr,"zmtx: sending file \"%s\"\r",name);
 	}
@@ -566,30 +608,24 @@ send_file(const char * name)
 	file_fd = open(name,O_RDONLY);
 
 	if (file_fd < 0) {
-		if (opt_v) {
-			(void)fprintf(stderr,"zmtx: can't open file %s\n",name);
-		}
+		report_sender_errno("can't open file",name,errno);
 		return SEND_FAILED;
 	}
 
 	if (fstat(file_fd,&s) != 0) {
-		if (opt_v) {
-			(void)fprintf(stderr,"zmtx: can't stat file %s\n",name);
-		}
+		int error = errno;
+
+		report_sender_errno("can't stat file",name,error);
 		(void)close(file_fd);
 		return SEND_FAILED;
 	}
 	if (s.st_size < 0) {
-		if (opt_v) {
-			(void)fprintf(stderr,"zmtx: file is too large for ZMODEM: %s\n",name);
-		}
+		report_sender_file("file is too large for ZMODEM",name);
 		(void)close(file_fd);
 		return SEND_FAILED;
 	}
 	if ((uintmax_t)s.st_size > UINT32_MAX) {
-		if (opt_v) {
-			(void)fprintf(stderr,"zmtx: file is too large for ZMODEM: %s\n",name);
-		}
+		report_sender_file("file is too large for ZMODEM",name);
 		(void)close(file_fd);
 		return SEND_FAILED;
 	}
@@ -675,6 +711,7 @@ send_file(const char * name)
 	}
 
 	if (strlen(n) >= sizeof(tx_data_subpacket)) {
+		report_sender_file("file name is too long",name);
 		(void)close(file_fd);
 		return SEND_FAILED;
 	}
@@ -684,10 +721,12 @@ send_file(const char * name)
 	written = snprintf(p,remaining,"%" PRIu32 " %" PRIoMAX " 0 0 %d 0",
 		size,wire_mdate,n_files_remaining);
 	if (written < 0) {
+		report_sender_file("can't encode file metadata",name);
 		(void)close(file_fd);
 		return SEND_FAILED;
 	}
 	if ((size_t)written >= remaining) {
+		report_sender_file("file metadata is too long",name);
 		(void)close(file_fd);
 		return SEND_FAILED;
 	}
@@ -702,11 +741,15 @@ send_file(const char * name)
 	 	 */
 
 		if (tx_header(&protocol,zfile_frame) != 0) {
+			report_sender_protocol("can't send file header",
+			    ZMODEM_IO_ERROR);
 			(void)close(file_fd);
 			return SEND_FAILED;
 		}
 		if (tx_data(&protocol,ZCRCW,tx_data_subpacket,
 		    (size_t)(p - (char *)tx_data_subpacket)) != 0) {
+			report_sender_protocol("can't send file information",
+			    ZMODEM_IO_ERROR);
 			(void)close(file_fd);
 			return SEND_FAILED;
 		}
@@ -744,6 +787,7 @@ send_file(const char * name)
 		}
 	}
 	if (type != ZRPOS) {
+		report_sender_protocol("can't start file transfer",type);
 		(void)close(file_fd);
 		return SEND_FAILED;
 	}
@@ -758,6 +802,7 @@ send_file(const char * name)
 
 		if (!seek_sender(file_fd,pos)) {
 			(void)tx_pos_header(&protocol,ZFERR,pos);
+			report_sender_file("can't seek file to requested position",name);
 			(void)close(file_fd);
 			return SEND_FAILED;
 		}
@@ -780,6 +825,9 @@ send_file(const char * name)
 			continue;
 		}
 		if (type != ZACK) {
+			if (!send_error_reported) {
+				report_sender_protocol("file-data transfer failed",type);
+			}
 			(void)close(file_fd);
 			return SEND_FAILED;
 		}
@@ -787,6 +835,8 @@ send_file(const char * name)
 		zmodem_set_header_position(zeof_frame,(uint32_t)current_file_size);
 		for (finish_attempts=0;finish_attempts<MAX_RETRIES;finish_attempts++) {
 			if (tx_hex_header(&protocol,zeof_frame) != 0) {
+				report_sender_protocol("can't send end-of-file header",
+				    ZMODEM_IO_ERROR);
 				(void)close(file_fd);
 				return SEND_FAILED;
 			}
@@ -817,12 +867,14 @@ send_file(const char * name)
 			}
 		}
 		if (!resume) {
+			report_sender_protocol("can't finish file transfer",type);
 			(void)close(file_fd);
 			return SEND_FAILED;
 		}
 	}
 
 	(void)close(file_fd);
+	report_sender_protocol("file transfer retries exhausted",type);
 	return SEND_FAILED;
 }
 
@@ -1055,8 +1107,8 @@ main(int argc,char ** argv)
 		enum send_result result = send_file(*argv);
 
 		if (result == SEND_FAILED) {
-			if (opt_v) {
-				(void)fprintf(stderr,"zmtx: transfer failed.\n");
+			if (!send_error_reported) {
+				report_sender_file("file transfer failed",*argv);
 			}
 			transfer_failed = true;
 			break;
@@ -1083,6 +1135,10 @@ main(int argc,char ** argv)
 		type = TIMEOUT;
 		for (attempts=0;attempts<MAX_RETRIES;attempts++) {
 			if (tx_hex_header(&protocol,zfin_header) != 0) {
+				if (!transfer_failed) {
+					report_sender_protocol("can't close session",
+					    ZMODEM_IO_ERROR);
+				}
 				transfer_failed = true;
 				break;
 			}
@@ -1109,10 +1165,17 @@ main(int argc,char ** argv)
 				finish_result = tx_flush(&protocol);
 			}
 			if (finish_result != 0) {
+				if (!transfer_failed) {
+					report_sender_protocol("can't finish session",
+					    ZMODEM_IO_ERROR);
+				}
 				transfer_failed = true;
 			}
 		}
 		else {
+			if (!transfer_failed) {
+				report_sender_protocol("can't close session",type);
+			}
 			transfer_failed = true;
 		}
 	}

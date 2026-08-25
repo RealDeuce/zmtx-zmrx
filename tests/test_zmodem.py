@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 
+import errno
 import os
 import socket
 import subprocess
@@ -715,6 +716,8 @@ class ZmodemTests(unittest.TestCase):
                 stderr = process.communicate(timeout=10)[1]
                 self.assertEqual(process.returncode, 4,
                                  stderr.decode(errors="replace"))
+                self.assertIn(b"can't inspect file", stderr)
+                self.assertIn(os.strerror(errno.ENOTDIR).encode(), stderr)
             finally:
                 peer.sock.close()
                 if process.poll() is None:
@@ -859,6 +862,7 @@ class ZmodemTests(unittest.TestCase):
                 self.assertEqual(process.returncode, 3,
                                  stderr.decode(errors="replace"))
                 self.assertIn(b"input error establishing contact", stderr)
+                self.assertIn(b"transfer cancelled", stderr)
             finally:
                 peer.sock.close()
                 if process.poll() is None:
@@ -898,6 +902,7 @@ class ZmodemTests(unittest.TestCase):
                 stderr = process.communicate(timeout=10)[1]
                 self.assertEqual(process.returncode, 4,
                                  stderr.decode(errors="replace"))
+                self.assertIn(b"transfer cancelled", stderr)
             finally:
                 peer.sock.close()
                 if process.poll() is None:
@@ -912,6 +917,7 @@ class ZmodemTests(unittest.TestCase):
             stderr = process.communicate(timeout=10)[1]
             self.assertEqual(process.returncode, 4,
                              stderr.decode(errors="replace"))
+            self.assertIn(b"transport I/O error", stderr)
 
     def test_receiver_accepts_garbage_before_over_and_out(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -943,6 +949,7 @@ class ZmodemTests(unittest.TestCase):
                     stderr = process.communicate(timeout=10)[1]
                     self.assertEqual(process.returncode, 4,
                                      stderr.decode(errors="replace"))
+                    self.assertIn(b"protocol timeout", stderr)
                 finally:
                     peer.sock.close()
                     if process.poll() is None:
@@ -1427,6 +1434,7 @@ class ZmodemTests(unittest.TestCase):
                     stderr = process.communicate(timeout=10)[1]
                     self.assertEqual(process.returncode, 4,
                                      stderr.decode(errors="replace"))
+                    self.assertIn(b"transfer cancelled", stderr)
                 finally:
                     peer.sock.close()
                     if process.poll() is None:
@@ -1490,25 +1498,32 @@ class ZmodemTests(unittest.TestCase):
                     process.wait()
 
     def test_receiver_reports_file_open_failure(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            process, peer = self.start_receiver(temporary, "-v")
-            try:
-                info = b"missing/file.bin\0" + b"1 0 0 0 1 0\0"
-                peer.send(hex_header(ZFILE) + data_subpacket(info, ZCRCW))
-                frame_type, position, _ = peer.header()
-                self.assertEqual((frame_type, position), (ZFERR, 0))
-                frame_type, _, _ = peer.header()
-                self.assertEqual(frame_type, ZFIN)
-                peer.send(b"OO")
-                stderr = process.communicate(timeout=10)[1]
-                self.assertEqual(process.returncode, 4,
-                                 stderr.decode(errors="replace"))
-                self.assertIn(b"can't open file", stderr)
-            finally:
-                peer.sock.close()
-                if process.poll() is None:
-                    process.kill()
-                    process.wait()
+        for options, quiet in (((), False), (("-q",), True)):
+            with self.subTest(quiet=quiet), \
+                    tempfile.TemporaryDirectory() as temporary:
+                process, peer = self.start_receiver(temporary, *options)
+                try:
+                    info = b"missing/file.bin\0" + b"1 0 0 0 1 0\0"
+                    peer.send(hex_header(ZFILE) + data_subpacket(info, ZCRCW))
+                    frame_type, position, _ = peer.header()
+                    self.assertEqual((frame_type, position), (ZFERR, 0))
+                    frame_type, _, _ = peer.header()
+                    self.assertEqual(frame_type, ZFIN)
+                    peer.send(b"OO")
+                    stderr = process.communicate(timeout=10)[1]
+                    self.assertEqual(process.returncode, 4,
+                                     stderr.decode(errors="replace"))
+                    if quiet:
+                        self.assertEqual(stderr, b"")
+                    else:
+                        self.assertIn(b"can't open file", stderr)
+                        self.assertIn(b"missing/file.bin", stderr)
+                        self.assertIn(os.strerror(errno.ENOENT).encode(), stderr)
+                finally:
+                    peer.sock.close()
+                    if process.poll() is None:
+                        process.kill()
+                        process.wait()
 
     def test_receiver_handles_remote_file_error(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -1525,6 +1540,7 @@ class ZmodemTests(unittest.TestCase):
                 stderr = process.communicate(timeout=10)[1]
                 self.assertEqual(process.returncode, 4,
                                  stderr.decode(errors="replace"))
+                self.assertIn(b"remote file error", stderr)
             finally:
                 peer.sock.close()
                 if process.poll() is None:
@@ -1718,6 +1734,7 @@ class ZmodemTests(unittest.TestCase):
                 peer.send(b"OO")
                 stderr = process.communicate(timeout=10)[1]
                 self.assertEqual(process.returncode, 4, stderr.decode(errors="replace"))
+                self.assertIn(b"invalid protocol data", stderr)
             finally:
                 peer.sock.close()
                 if process.poll() is None:
@@ -1767,6 +1784,8 @@ class ZmodemTests(unittest.TestCase):
                 stderr = process.communicate(timeout=10)[1]
                 self.assertEqual(process.returncode, 4,
                                  stderr.decode(errors="replace"))
+                self.assertIn(b"can't write file", stderr)
+                self.assertIn(os.strerror(errno.ENOSPC).encode(), stderr)
             finally:
                 peer.sock.close()
                 if process.poll() is None:
@@ -1792,6 +1811,8 @@ class ZmodemTests(unittest.TestCase):
                 peer.send(b"OO")
                 stderr = process.communicate(timeout=10)[1]
                 self.assertEqual(process.returncode, 4, stderr.decode(errors="replace"))
+                self.assertIn(b"can't flush file", stderr)
+                self.assertIn(os.strerror(errno.ENOSPC).encode(), stderr)
             finally:
                 peer.sock.close()
                 if process.poll() is None:
@@ -1846,7 +1867,7 @@ class ZmodemTests(unittest.TestCase):
                             f"large sparse files are unavailable: {error}")
                 local, remote = socket.socketpair()
                 process = subprocess.Popen(
-                    [str(ZMTX), "-v", name], cwd=temporary, stdin=local,
+                    [str(ZMTX), name], cwd=temporary, stdin=local,
                     stdout=local, stderr=subprocess.PIPE,
                 )
                 local.close()
@@ -1867,6 +1888,9 @@ class ZmodemTests(unittest.TestCase):
                     expected = b"too large" if kind == "oversized" \
                         else b"can't open"
                     self.assertIn(expected, stderr)
+                    self.assertIn(name.encode(), stderr)
+                    if kind == "missing":
+                        self.assertIn(os.strerror(errno.ENOENT).encode(), stderr)
                 finally:
                     remote.close()
                     if process.poll() is None:
@@ -1889,6 +1913,8 @@ class ZmodemTests(unittest.TestCase):
                 stderr = process.communicate(timeout=10)[1]
                 self.assertEqual(process.returncode, 4,
                                  stderr.decode(errors="replace"))
+                self.assertIn(b"can't read file", stderr)
+                self.assertIn(os.strerror(errno.EISDIR).encode(), stderr)
             finally:
                 peer.sock.close()
                 if process.poll() is None:
@@ -2102,6 +2128,7 @@ class ZmodemTests(unittest.TestCase):
                 stderr = process.communicate(timeout=10)[1]
                 self.assertEqual(process.returncode, 4,
                                  stderr.decode(errors="replace"))
+                self.assertIn(b"negative acknowledgement", stderr)
             finally:
                 peer.sock.close()
                 if process.poll() is None:
@@ -2292,6 +2319,7 @@ class ZmodemTests(unittest.TestCase):
             remote.close()
             stderr = process.communicate(timeout=10)[1]
             self.assertEqual(process.returncode, 4, stderr.decode(errors="replace"))
+            self.assertIn(b"transport I/O error", stderr)
 
 
 if __name__ == "__main__":

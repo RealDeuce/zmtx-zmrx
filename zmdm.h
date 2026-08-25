@@ -110,6 +110,7 @@ struct zmodem {
  * Transmit sources must not overlap protocol storage modified while encoding.
  */
 int zmodem_init(struct zmodem * restrict,const struct zmodem_io * restrict);
+const char * zmodem_result_description(int);
 int rx_poll(struct zmodem *);
 int rx_purge(struct zmodem *);
 int rx_raw(struct zmodem *,int);

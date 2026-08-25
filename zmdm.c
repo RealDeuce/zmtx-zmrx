@@ -42,6 +42,35 @@
 #include "zmdm.h"
 #include "crctab.h"
 
+const char *
+zmodem_result_description(int result)
+{
+	switch (result) {
+		case ZMODEM_INVALID_ARGUMENT:
+			return "invalid protocol argument";
+		case ZMODEM_IO_ERROR:
+			return "transport I/O error";
+		case ZMODEM_CANCELLED:
+			return "transfer cancelled";
+		case ZMODEM_INVALID_DATA:
+			return "invalid protocol data";
+		case ZMODEM_INVALID_HEADER:
+			return "invalid protocol header";
+		case ZMODEM_TIMEOUT:
+			return "protocol timeout";
+		case ZABORT:
+			return "remote abort";
+		case ZNAK:
+			return "negative acknowledgement";
+		case ZFERR:
+			return "remote file error";
+		case ZCAN:
+			return "remote cancellation";
+		default:
+			return "unexpected protocol response";
+	}
+}
+
 enum tx_class {
 	TX_NORMAL = 0,
 	TX_ESCAPE_ALWAYS = 1,

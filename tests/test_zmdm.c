@@ -810,6 +810,30 @@ int
 main(void)
 {
 	bool passed = true;
+	static const struct {
+		int result;
+		const char * description;
+	} descriptions[] = {
+		{ ZMODEM_INVALID_ARGUMENT,"invalid protocol argument" },
+		{ ZMODEM_TIMEOUT,"protocol timeout" },
+		{ ZMODEM_CANCELLED,"transfer cancelled" },
+		{ ZMODEM_INVALID_DATA,"invalid protocol data" },
+		{ ZMODEM_INVALID_HEADER,"invalid protocol header" },
+		{ ZMODEM_IO_ERROR,"transport I/O error" },
+		{ ZABORT,"remote abort" },
+		{ ZNAK,"negative acknowledgement" },
+		{ ZFERR,"remote file error" },
+		{ ZCAN,"remote cancellation" },
+		{ ZRINIT,"unexpected protocol response" }
+	};
+	size_t index;
+
+	for (index = 0U; index < sizeof(descriptions) / sizeof(descriptions[0]);
+	    index++) {
+		passed = expect(strcmp(zmodem_result_description(
+		    descriptions[index].result),descriptions[index].description) == 0,
+		    "protocol result description") && passed;
+	}
 
 	passed = test_header_position() && passed;
 	passed = test_transmit_hex_header() && passed;

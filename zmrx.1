@@ -46,10 +46,31 @@ options at the receiving end -- see the protocol
 specification, or be careful.
 .TP
 .B \-v,\-q
-Verbose (quiet) mode.
+Verbose (quiet) mode.  Quiet mode suppresses progress, debug, and transfer-error
+diagnostics; exit status still reports failure.
 .TP
 .B \-d
 Debug mode.
+.SH "EXIT STATUS"
+.TP
+.B 0
+The transfer completed successfully.
+.TP
+.B 1
+Command-line usage was invalid.
+.TP
+.B 2
+Local initialization or transfer-line setup failed.
+.TP
+.B 3
+The initial protocol session could not be established.
+.TP
+.B 4
+A file or protocol transfer failed.
+.TP
+.B 5
+The transfer succeeded, but buffered output, terminal restoration, or transfer-line
+close failed during cleanup.
 .SH "SEE ALSO"
 .PD
 .BR  zmtx(1), sz(1), rz(1)
