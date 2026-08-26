@@ -110,6 +110,7 @@ def static_analysis(directory):
     gcc = gcc_compiler()
     diagnostics = ["-Wall", "-Wextra", "-Werror", "-pedantic-errors"]
     generated_crc = directory / "crctab_slicing.h"
+    no_uint64 = directory / "no_uint64.h"
 
     run([sys.executable, ROOT / "tools/generate_crc32_slicing.py",
          generated_crc])
@@ -123,6 +124,19 @@ def static_analysis(directory):
         output = directory / (Path(source).stem + ".gcc.o")
         run([gcc, *COMMON, *diagnostics, "-fanalyzer", "-c", ROOT / source,
              "-o", output])
+
+    no_uint64.write_text(
+        "#include <stdint.h>\n#undef UINT64_MAX\n#undef UINT64_C\n",
+        encoding="ascii",
+    )
+    fallback_test = directory / "test_zmdm_uint32_spans"
+    compile_program(
+        clang,
+        fallback_test,
+        ["tests/test_zmdm.c", "zmdm.c", "crctab.c"],
+        [*diagnostics, "-include", no_uint64],
+    )
+    run([fallback_test], timeout=60)
 
     clang_tidy = os.environ.get("CLANG_TIDY")
     tidy_candidates = ([clang_tidy] if clang_tidy else [

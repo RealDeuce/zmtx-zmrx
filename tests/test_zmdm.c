@@ -371,6 +371,46 @@ data_round_trip(bool use_crc32,bool escape_controls,uint8_t sent_frame_end,
 }
 
 static bool
+test_span_scanner_round_trip(void)
+{
+	struct zmodem sender;
+	struct zmodem receiver;
+	struct fake_io sending_io;
+	struct fake_io receiving_io;
+	uint8_t payload[37];
+	uint8_t received[sizeof(payload)];
+	uint8_t frame_end;
+	size_t length;
+	size_t index;
+	bool passed;
+
+	for (index = 0U; index < sizeof(payload); index++) {
+		payload[index] = (uint8_t)(UINT8_C(0x40) + index);
+	}
+	payload[9] = ZDLE;
+	payload[20] = XON;
+	payload[31] = UINT8_C(0x90);
+
+	initialize(&sender,&sending_io);
+	passed = expect(tx_data(&sender,ZCRCE,payload,sizeof(payload)) == 0,
+	    "transmit span scanner packet");
+
+	initialize(&receiver,&receiving_io);
+	(void)memcpy(receiving_io.input,sending_io.output,
+	    sending_io.output_length);
+	receiving_io.input_length = sending_io.output_length;
+	passed = expect(rx_data(&receiver,received,sizeof(received),&length,
+	    &frame_end) == ENDOFFRAME,"receive span scanner packet") && passed;
+	passed = expect(length == sizeof(payload),"span scanner packet length") &&
+	    passed;
+	passed = expect(frame_end == ZCRCE,"span scanner packet terminator") &&
+	    passed;
+	passed = expect(memcmp(received,payload,sizeof(payload)) == 0,
+	    "span scanner packet payload") && passed;
+	return passed;
+}
+
+static bool
 test_eighth_bit_escaping(void)
 
 {
@@ -593,6 +633,7 @@ test_data_packets(void)
 	size_t length;
 	bool passed = true;
 
+	passed = test_span_scanner_round_trip() && passed;
 	passed = data_round_trip(false,false,ZCRCW,ENDOFFRAME) && passed;
 	passed = data_round_trip(false,true,ZCRCW,ENDOFFRAME) && passed;
 	passed = data_round_trip(true,false,ZCRCW,ENDOFFRAME) && passed;

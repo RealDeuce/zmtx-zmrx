@@ -382,29 +382,47 @@ buffer_tx(struct zmodem * restrict zmodem,uint8_t c,
 	}
 }
 
+#ifdef UINT64_MAX
+typedef uint64_t span_word;
+#define SPAN_WORD_ONES UINT64_C(0x0101010101010101)
+#define SPAN_WORD_HIGHS UINT64_C(0x8080808080808080)
+#define SPAN_WORD_ZDLE UINT64_C(0x1818181818181818)
+#define SPAN_WORD_CONTROL_MASK UINT64_C(0x7f7f7f7f7f7f7f7f)
+#define SPAN_WORD_CONTROL UINT64_C(0x1010101010101010)
+#define SPAN_WORD_FLOW_MASK UINT64_C(0x7d7d7d7d7d7d7d7d)
+#define SPAN_WORD_FLOW UINT64_C(0x1111111111111111)
+#else
+typedef uint32_t span_word;
+#define SPAN_WORD_ONES UINT32_C(0x01010101)
+#define SPAN_WORD_HIGHS UINT32_C(0x80808080)
+#define SPAN_WORD_ZDLE UINT32_C(0x18181818)
+#define SPAN_WORD_CONTROL_MASK UINT32_C(0x7f7f7f7f)
+#define SPAN_WORD_CONTROL UINT32_C(0x10101010)
+#define SPAN_WORD_FLOW_MASK UINT32_C(0x7d7d7d7d)
+#define SPAN_WORD_FLOW UINT32_C(0x11111111)
+#endif
+
 static inline size_t
 tx_copy_plain_span(const uint8_t * classes,uint8_t * output,
     const uint8_t * data,size_t length)
 
 {
-	const uint64_t ones = UINT64_C(0x0101010101010101);
-	const uint64_t highs = UINT64_C(0x8080808080808080);
+	const span_word ones = SPAN_WORD_ONES;
+	const span_word highs = SPAN_WORD_HIGHS;
 	size_t span = 0U;
 
-	while (length - span >= sizeof(uint64_t)) {
-		uint64_t word;
-		uint64_t zdle;
-		uint64_t control;
-		uint64_t flow;
+	while (length - span >= sizeof(span_word)) {
+		span_word word;
+		span_word zdle;
+		span_word control;
+		span_word flow;
 
-		/* Find mandatory escapes while copying eight plain bytes at once. */
+		/* Find mandatory escapes while copying a plain word at once. */
 		(void)memcpy(&word,&data[span],sizeof(word));
-		zdle = word ^ UINT64_C(0x1818181818181818);
+		zdle = word ^ SPAN_WORD_ZDLE;
 		/* 0x10/0x90 share seven bits; flow controls vary in bits 1 and 7. */
-		control = (word & UINT64_C(0x7f7f7f7f7f7f7f7f)) ^
-		    UINT64_C(0x1010101010101010);
-		flow = (word & UINT64_C(0x7d7d7d7d7d7d7d7d)) ^
-		    UINT64_C(0x1111111111111111);
+		control = (word & SPAN_WORD_CONTROL_MASK) ^ SPAN_WORD_CONTROL;
+		flow = (word & SPAN_WORD_FLOW_MASK) ^ SPAN_WORD_FLOW;
 		if ((((zdle - ones) & ~zdle & highs) |
 		    ((control - ones) & ~control & highs) |
 		    ((flow - ones) & ~flow & highs)) != 0U) {
@@ -782,21 +800,20 @@ rx_plain_span(const struct zmodem * restrict zmodem,
 
 {
 	const uint8_t * data = &zmodem->input_buffer[cursor->input_index];
-	const uint64_t ones = UINT64_C(0x0101010101010101);
-	const uint64_t highs = UINT64_C(0x8080808080808080);
+	const span_word ones = SPAN_WORD_ONES;
+	const span_word highs = SPAN_WORD_HIGHS;
 	size_t length = 0U;
 
-	while (cursor->input_count - length >= sizeof(uint64_t)) {
-		uint64_t word;
-		uint64_t zdle;
-		uint64_t flow;
+	while (cursor->input_count - length >= sizeof(span_word)) {
+		span_word word;
+		span_word zdle;
+		span_word flow;
 
-		/* Detect ZDLE or flow control in eight bytes at a time. */
+		/* Detect ZDLE or flow control in a word at a time. */
 		(void)memcpy(&word,&data[length],sizeof(word));
-		zdle = word ^ UINT64_C(0x1818181818181818);
+		zdle = word ^ SPAN_WORD_ZDLE;
 		/* The four flow-control values vary only in bits 1 and 7. */
-		flow = (word & UINT64_C(0x7d7d7d7d7d7d7d7d)) ^
-		    UINT64_C(0x1111111111111111);
+		flow = (word & SPAN_WORD_FLOW_MASK) ^ SPAN_WORD_FLOW;
 		if ((((zdle - ones) & ~zdle & highs) |
 		    ((flow - ones) & ~flow & highs)) != 0U) {
 			break;
