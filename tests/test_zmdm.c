@@ -508,6 +508,81 @@ test_receive_escape_variants(void)
 }
 
 static bool
+is_frame_end_byte(uint8_t byte)
+{
+	return (byte >= ZCRCE) && (byte <= ZCRCW);
+}
+
+static bool
+test_reject_frame_end_in_data_crc(bool use_crc32)
+{
+	struct zmodem protocol;
+	struct fake_io fake;
+	uint8_t payload = 0U;
+	uint8_t crc_bytes[4];
+	uint8_t received[1];
+	uint8_t frame_end;
+	size_t crc_count = use_crc32 ? 4U : 2U;
+	size_t marked_index = sizeof(crc_bytes);
+	size_t index;
+	size_t length;
+	size_t offset = 0U;
+	unsigned candidate;
+	bool passed;
+
+	for (candidate = 0U; candidate < 256U; candidate++) {
+		payload = (uint8_t)candidate;
+		if (use_crc32) {
+			uint32_t crc = crc32_update(UINT32_MAX,&payload,1U);
+
+			crc = ~crc32_byte_update(crc,ZCRCE);
+			for (index = 0U; index < crc_count; index++) {
+				crc_bytes[index] = (uint8_t)(crc >> (index * 8U));
+			}
+		}
+		else {
+			uint16_t crc = crc16_update(0U,payload);
+
+			crc = crc16_update(crc,ZCRCE);
+			crc = crc16_update(crc,0U);
+			crc = crc16_update(crc,0U);
+			crc_bytes[0] = (uint8_t)(crc >> 8);
+			crc_bytes[1] = (uint8_t)crc;
+		}
+		for (index = 0U; index < crc_count; index++) {
+			if (is_frame_end_byte(crc_bytes[index])) {
+				marked_index = index;
+				break;
+			}
+		}
+		if (marked_index < crc_count) {
+			break;
+		}
+	}
+
+	initialize(&protocol,&fake);
+	protocol.receive_32_bit_data = use_crc32;
+	offset = append_escaped(fake.input,offset,payload);
+	fake.input[offset++] = ZDLE;
+	fake.input[offset++] = ZCRCE;
+	for (index = 0U; index < crc_count; index++) {
+		if (index == marked_index) {
+			fake.input[offset++] = ZDLE;
+			fake.input[offset++] = crc_bytes[index];
+		}
+		else {
+			offset = append_escaped(fake.input,offset,crc_bytes[index]);
+		}
+	}
+	fake.input_length = offset;
+	passed = expect(marked_index < crc_count,"construct marked data CRC");
+	passed = expect(rx_data(&protocol,received,sizeof(received),&length,
+	    &frame_end) == ZMODEM_INVALID_DATA,
+	    "reject frame end in data CRC") && passed;
+	return passed;
+}
+
+static bool
 test_data_packets(void)
 {
 	struct zmodem protocol;
@@ -529,6 +604,8 @@ test_data_packets(void)
 	passed = test_data_read_failures(false) && passed;
 	passed = test_data_read_failures(true) && passed;
 	passed = test_receive_escape_variants() && passed;
+	passed = test_reject_frame_end_in_data_crc(false) && passed;
+	passed = test_reject_frame_end_in_data_crc(true) && passed;
 	initialize(&protocol,&fake);
 	passed = expect(tx_data(&protocol,ZCRCE,payload,ZMAXSPLEN + 1U) != 0,
 	    "reject oversized transmit packet") && passed;
@@ -601,6 +678,120 @@ test_protocol_maximum_overflow(bool use_crc32)
 
 static int transmit_header_style(struct zmodem *,const uint8_t *,unsigned,
     bool);
+
+static size_t
+header_crc_bytes(bool use_crc32,const uint8_t * header,uint8_t * bytes)
+{
+	if (use_crc32) {
+		uint32_t crc = ~crc32_update(UINT32_MAX,header,HDRLEN);
+		size_t index;
+
+		for (index = 0U; index < sizeof(crc); index++) {
+			bytes[index] = (uint8_t)(crc >> (index * 8U));
+		}
+		return sizeof(crc);
+	}
+	else {
+		uint16_t crc = crc16_buffer_update(0U,header,HDRLEN);
+
+		crc = crc16_update(crc,0U);
+		crc = crc16_update(crc,0U);
+		bytes[0] = (uint8_t)(crc >> 8);
+		bytes[1] = (uint8_t)crc;
+		return 2U;
+	}
+}
+
+static bool
+test_reject_frame_end_in_header_body(void)
+{
+	struct zmodem protocol;
+	struct fake_io fake;
+	uint8_t header[HDRLEN] = { ZDATA,ZCRCE,2U,3U,4U };
+	uint8_t crc_bytes[4];
+	size_t crc_count;
+	size_t index;
+	size_t offset = 0U;
+	bool passed;
+
+	initialize(&protocol,&fake);
+	fake.input[offset++] = ZPAD;
+	fake.input[offset++] = ZDLE;
+	fake.input[offset++] = ZBIN;
+	for (index = 0U; index < sizeof(header); index++) {
+		if (index == 1U) {
+			fake.input[offset++] = ZDLE;
+			fake.input[offset++] = header[index];
+		}
+		else {
+			offset = append_escaped(fake.input,offset,header[index]);
+		}
+	}
+	crc_count = header_crc_bytes(false,header,crc_bytes);
+	for (index = 0U; index < crc_count; index++) {
+		offset = append_escaped(fake.input,offset,crc_bytes[index]);
+	}
+	fake.input_length = offset;
+	passed = expect(rx_header_and_check(&protocol,1000) == ZMODEM_TIMEOUT,
+	    "reject frame end in binary header body");
+	passed = expect(fake.output_length > 0U,
+	    "marked binary header body sends ZNAK") && passed;
+	return passed;
+}
+
+static bool
+test_reject_frame_end_in_header_crc(bool use_crc32)
+{
+	struct zmodem protocol;
+	struct fake_io fake;
+	uint8_t header[HDRLEN] = { ZDATA,1U,2U,3U,0U };
+	uint8_t crc_bytes[4];
+	size_t crc_count = 0U;
+	size_t marked_index = sizeof(crc_bytes);
+	size_t index;
+	size_t offset = 0U;
+	unsigned candidate;
+	bool passed;
+
+	for (candidate = 0U; candidate < 256U; candidate++) {
+		header[4] = (uint8_t)candidate;
+		crc_count = header_crc_bytes(use_crc32,header,crc_bytes);
+		for (index = 0U; index < crc_count; index++) {
+			if (is_frame_end_byte(crc_bytes[index])) {
+				marked_index = index;
+				break;
+			}
+		}
+		if (marked_index < crc_count) {
+			break;
+		}
+	}
+
+	initialize(&protocol,&fake);
+	fake.input[offset++] = ZPAD;
+	fake.input[offset++] = ZDLE;
+	fake.input[offset++] = use_crc32 ? ZBIN32 : ZBIN;
+	for (index = 0U; index < sizeof(header); index++) {
+		offset = append_escaped(fake.input,offset,header[index]);
+	}
+	for (index = 0U; index < crc_count; index++) {
+		if (index == marked_index) {
+			fake.input[offset++] = ZDLE;
+			fake.input[offset++] = crc_bytes[index];
+		}
+		else {
+			offset = append_escaped(fake.input,offset,crc_bytes[index]);
+		}
+	}
+	fake.input_length = offset;
+	passed = expect(marked_index < crc_count,
+	    "construct marked binary header CRC");
+	passed = expect(rx_header_and_check(&protocol,1000) == ZMODEM_TIMEOUT,
+	    "reject frame end in binary header CRC") && passed;
+	passed = expect(fake.output_length > 0U,
+	    "marked binary header CRC sends ZNAK") && passed;
+	return passed;
+}
 
 static bool
 header_round_trip(bool use_crc32)
@@ -723,6 +914,9 @@ test_header_read_failures(void)
 	passed = test_header_read_sweep(0U) && passed;
 	passed = test_header_read_sweep(1U) && passed;
 	passed = test_header_read_sweep(2U) && passed;
+	passed = test_reject_frame_end_in_header_body() && passed;
+	passed = test_reject_frame_end_in_header_crc(false) && passed;
+	passed = test_reject_frame_end_in_header_crc(true) && passed;
 
 	initialize(&protocol,&fake);
 	(void)memcpy(fake.input,prefix,sizeof(prefix));
@@ -770,6 +964,15 @@ test_header_read_failures(void)
 	fake.input_length = 4U;
 	passed = expect(rx_header(&protocol,1000) == TIMEOUT,
 	    "reject high invalid hex digit") && passed;
+	initialize(&protocol,&fake);
+	(void)memcpy(fake.input,prefix,2U);
+	fake.input[2] = ZHEX;
+	fake.input[3] = '/';
+	fake.input_length = 4U;
+	passed = expect(rx_header_and_check(&protocol,1000) == TIMEOUT,
+	    "checked invalid hex digit") && passed;
+	passed = expect(fake.output_length > 0U,
+	    "invalid hex digit sends ZNAK") && passed;
 
 	for (index = 1U; index <= 2U; index++) {
 		struct zmodem sender;

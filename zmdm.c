@@ -665,6 +665,15 @@ rx_needs_slow_path(int c)
 	return (c == ZDLE) || rx_is_flow_control(c);
 }
 
+/*
+ * Decoded bytes occupy 0 through UINT8_MAX and errors are negative.  Mark
+ * data-subpacket terminators with the next positive value so the result also
+ * fits in the minimum range of a conforming C int.
+ */
+enum {
+	RX_FRAME_END_FLAG = UINT8_MAX + 1
+};
+
 static int
 rx_cursor_slow(struct zmodem * restrict zmodem,int timeout_ms,int c,
     struct rx_cursor * restrict cursor)
@@ -715,7 +724,7 @@ rx_cursor_slow(struct zmodem * restrict zmodem,int timeout_ms,int c,
 				case ZCRCG:
 				case ZCRCQ:
 				case ZCRCW:
-					return c | ZDLEESC;
+					return c | RX_FRAME_END_FLAG;
 				case ZRUB0:
 					return 0x7f;
 				case ZRUB1:
@@ -814,18 +823,33 @@ rx(struct zmodem * zmodem,int timeout_ms)
 }
 
 static int
+rx_byte(struct zmodem * zmodem,int timeout_ms,int invalid_result)
+
+{
+	int c = rx(zmodem,timeout_ms);
+
+	if (c < 0) {
+		return c;
+	}
+	if (c > UINT8_MAX) {
+		return invalid_result;
+	}
+	return c;
+}
+
+static int
 rx_crc16(struct zmodem * restrict zmodem,int timeout_ms,
-    uint16_t * restrict value)
+	int invalid_result,uint16_t * restrict value)
 
 {
 	int high;
 	int low;
 
-	high = rx(zmodem,timeout_ms);
+	high = rx_byte(zmodem,timeout_ms,invalid_result);
 	if (high < 0) {
 		return high;
 	}
-	low = rx(zmodem,timeout_ms);
+	low = rx_byte(zmodem,timeout_ms,invalid_result);
 	if (low < 0) {
 		return low;
 	}
@@ -836,7 +860,7 @@ rx_crc16(struct zmodem * restrict zmodem,int timeout_ms,
 
 static int
 rx_crc32(struct zmodem * restrict zmodem,int timeout_ms,
-    uint32_t * restrict value)
+	int invalid_result,uint32_t * restrict value)
 
 {
 	int c;
@@ -844,7 +868,7 @@ rx_crc32(struct zmodem * restrict zmodem,int timeout_ms,
 	uint32_t result = 0;
 
 	for (i=0;i<sizeof(result);i++) {
-		c = rx(zmodem,timeout_ms);
+		c = rx_byte(zmodem,timeout_ms,invalid_result);
 		if (c < 0) {
 			return c;
 		}
@@ -916,7 +940,7 @@ rx_32_data(struct zmodem * restrict zmodem,uint8_t * restrict p,
 			*l = used;
 			return c;
 		}
-		if (c < 0x100) {
+		if (c <= UINT8_MAX) {
 			if (used < limit) {
 				p[used] = (uint8_t)c;
 				used += 1U;
@@ -935,7 +959,7 @@ rx_32_data(struct zmodem * restrict zmodem,uint8_t * restrict p,
 	store_rx_cursor(zmodem,&cursor);
 	*l = used;
 
-	sub_frame_type = c & 0xff;
+	sub_frame_type = (uint8_t)c;
 
 	if (!overflow) {
 		crc = crc32_update(crc,p,used);
@@ -945,7 +969,8 @@ rx_32_data(struct zmodem * restrict zmodem,uint8_t * restrict p,
 	crc = ~crc;
 
 	{
-		int result = rx_crc32(zmodem,1000,&rxd_crc);
+		int result = rx_crc32(zmodem,1000,ZMODEM_INVALID_DATA,
+		    &rxd_crc);
 
 		if (result != ZMODEM_OK) {
 			return result;
@@ -1012,7 +1037,7 @@ rx_16_data(struct zmodem * restrict zmodem,uint8_t * restrict p,
 			*l = used;
 			return c;
 		}
-		if (c < 0x100) {
+		if (c <= UINT8_MAX) {
 			if (used < limit) {
 				p[used] = (uint8_t)c;
 				used += 1U;
@@ -1031,7 +1056,7 @@ rx_16_data(struct zmodem * restrict zmodem,uint8_t * restrict p,
 	store_rx_cursor(zmodem,&cursor);
 	*l = used;
 
-	sub_frame_type = c & 0xff;
+	sub_frame_type = (uint8_t)c;
 
 	if (!overflow) {
 		crc = crc16_buffer_update(crc,p,used);
@@ -1042,7 +1067,8 @@ rx_16_data(struct zmodem * restrict zmodem,uint8_t * restrict p,
 	crc = crc16_update(crc,0U);
 
 	{
-		int result = rx_crc16(zmodem,1000,&rxd_crc);
+		int result = rx_crc16(zmodem,1000,ZMODEM_INVALID_DATA,
+		    &rxd_crc);
 
 		if (result != ZMODEM_OK) {
 			return result;
@@ -1117,7 +1143,7 @@ rx_nibble(struct zmodem * zmodem,int timeout_ms)
 {
 	int c;
 
-	c = rx(zmodem,timeout_ms);
+	c = rx_byte(zmodem,timeout_ms,ZMODEM_INVALID_HEADER);
 
 	if (c < 0) {
 		return c;
@@ -1127,10 +1153,9 @@ rx_nibble(struct zmodem * zmodem,int timeout_ms)
 	if (c > '9') {
 		if (c < 'a' || c > 'f') {
 			/*
-			 * illegal hex; different than expected.
-			 * we might as well time out.
+			 * Illegal hex is a malformed header, not an input timeout.
 			 */
-			return TIMEOUT;
+			return ZMODEM_INVALID_HEADER;
 		}
 
 		c -= 'a' - 10;
@@ -1138,10 +1163,9 @@ rx_nibble(struct zmodem * zmodem,int timeout_ms)
 	else {
 		if (c < '0') {
 			/*
-			 * illegal hex; different than expected.
-			 * we might as well time out.
+			 * Illegal hex is a malformed header, not an input timeout.
 			 */
-			return TIMEOUT;
+			return ZMODEM_INVALID_HEADER;
 		}
 		c -= '0';
 	}
@@ -1189,7 +1213,7 @@ rx_bin16_header(struct zmodem * zmodem,int timeout_ms)
 	crc = 0;
 
 	for (n=0;n<5;n++) {
-		c = rx(zmodem,timeout_ms);
+		c = rx_byte(zmodem,timeout_ms,ZMODEM_INVALID_HEADER);
 		if (c < 0) {
 			return c;
 		}
@@ -1201,7 +1225,8 @@ rx_bin16_header(struct zmodem * zmodem,int timeout_ms)
 	crc = crc16_update(crc,0U);
 
 	{
-		int result = rx_crc16(zmodem,1000,&rxd_crc);
+		int result = rx_crc16(zmodem,1000,ZMODEM_INVALID_HEADER,
+		    &rxd_crc);
 
 		if (result != ZMODEM_OK) {
 			return result;
@@ -1266,7 +1291,7 @@ rx_hex_header(struct zmodem * zmodem,int timeout_ms)
 	/*
 	 * drop the end of line sequence after a hex header
 	 */
-	c = rx(zmodem,timeout_ms);
+	c = rx_byte(zmodem,timeout_ms,ZMODEM_INVALID_HEADER);
 	if (c < 0) {
 		return c;
 	}
@@ -1275,7 +1300,7 @@ rx_hex_header(struct zmodem * zmodem,int timeout_ms)
 		/*
 		 * both are expected with CR
 		 */
-		c = rx(zmodem,timeout_ms);
+		c = rx_byte(zmodem,timeout_ms,ZMODEM_INVALID_HEADER);
 		if (c < 0) {
 			return c;
 		}
@@ -1300,7 +1325,7 @@ rx_bin32_header(struct zmodem * zmodem,int timeout_ms)
 	crc = UINT32_MAX;
 
 	for (n=0;n<5;n++) {
-		c = rx(zmodem,timeout_ms);
+		c = rx_byte(zmodem,timeout_ms,ZMODEM_INVALID_HEADER);
 		if (c < 0) {
 			return c;
 		}
@@ -1311,7 +1336,8 @@ rx_bin32_header(struct zmodem * zmodem,int timeout_ms)
 	crc = ~crc;
 
 	{
-		int result = rx_crc32(zmodem,timeout_ms,&rxd_crc);
+		int result = rx_crc32(zmodem,timeout_ms,ZMODEM_INVALID_HEADER,
+		    &rxd_crc);
 
 		if (result != ZMODEM_OK) {
 			return result;
