@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="description" content="zmtx/zmrx: compact, POSIX-first ZMODEM tools with a portable C99 core and CP/M 2.2 and 16-bit DOS ports.">
+  <meta name="description" content="zmtx/zmrx: compact, POSIX-first ZMODEM tools with a portable C99 core and CP/M 2.2, DOS, and Windows 95 ports.">
   <title>zmtx/zmrx — ZMODEM tools</title>
   <link rel="stylesheet" href="style.css">
 </head>
@@ -46,7 +46,10 @@
 <span>$</span> make -f makefile.cpm
 
 <b># Build the 16-bit DOS port with Open Watcom</b>
-<span>$</span> wmake -f makefile.dos</code></pre>
+<span>$</span> wmake -f makefile.dos
+
+<b># Build the Windows 95 port with Open Watcom</b>
+<span>$</span> wmake -f makefile.win95</code></pre>
     </div>
   </header>
 
@@ -111,6 +114,15 @@
             Open Watcom builds 8086-compatible real-mode programs with full
             transfer buffers and selectable FOSSIL, interrupt-driven 16550,
             or BIOS serial I/O. DOSBox and X00 exercise every transport.
+          </p>
+        </article>
+        <article>
+          <p class="platform-status">Bundled secondary port</p>
+          <h3>Windows 95</h3>
+          <p>
+            Open Watcom builds 386-compatible Win32 programs for borrowed COM
+            handles or connected Winsock sockets, with optional ZMODEM
+            escaping of Telnet IAC bytes.
           </p>
         </article>
       </div>

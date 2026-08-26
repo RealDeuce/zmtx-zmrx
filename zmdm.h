@@ -85,6 +85,7 @@ struct zmodem {
 	bool can_fcs_32;
 	bool escape_all_control_characters;
 	bool escape_8th_bit;
+	bool escape_iac;
 	bool receive_escaped_8th_bit;
 	bool use_variable_headers;
 	bool management_newer;

@@ -67,6 +67,12 @@ selected. POSIX expands it to zero; a polling serial implementation can use it
 to prevent an otherwise conforming sender from overrunning a shallow device
 buffer.
 
+`ZMODEM_PLAT_ESCAPE_IAC(io)` is evaluated after the platform post-parse hook.
+It selects outbound encoding of `0xff` as ZMODEM's `ZDLE ZRUB1` sequence. The
+POSIX, CP/M, and DOS definitions expand directly to `false`; a transport used
+behind a Telnet-aware layer may expose an opt-in frontend setting without
+adding a POSIX function call or implementing Telnet in the transport.
+
 The two default macros must be constant Boolean expressions. They select the
 initial `-s` behavior and whether a receiver strips incoming directory names;
 command-line options may still change the selected behavior.
@@ -165,3 +171,17 @@ The frontend selects among FOSSIL, interrupt-driven 16550-compatible UART,
 and BIOS INT 14h transports at runtime. Its non-streaming and advertised
 receive-buffer macros describe the selected transport without adding wrapper
 calls to POSIX builds. Build and platform details are in `dos/README.md`.
+
+## Windows 95 reference port
+
+The `win95` directory implements the contract for Open Watcom's 32-bit
+compiler and the Windows 95 Win32 API. It uses the full protocol buffers and
+CRC tables, selects the 32-bit span scanner for the 386 target, and links the
+static compiler runtime with Winsock 1.1.
+
+The frontend adopts either a caller-owned COM handle or a caller-owned,
+already-connected socket. It does not close either object. COM line settings
+are preserved, temporary immediate-read timeouts are restored during cleanup,
+and socket operation uses only `WSOCK32.DLL`. Its optional IAC mode changes
+only ZMODEM byte encoding; Telnet parsing and negotiation remain outside the
+port. Build and launcher details are in `win95/README.md`.

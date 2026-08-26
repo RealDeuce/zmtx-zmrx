@@ -78,7 +78,8 @@ enum tx_class {
 	TX_ESCAPE_ALWAYS = 1,
 	TX_ESCAPE_CONTROL = 2,
 	TX_ESCAPE_CR = 4,
-	TX_ESCAPE_8TH = 8
+	TX_ESCAPE_8TH = 8,
+	TX_ESCAPE_IAC = 16
 };
 
 int
@@ -162,6 +163,9 @@ initialize_tx_classes(struct zmodem * zmodem)
 		if ((c & 0x80) != 0) {
 			action |= TX_ESCAPE_8TH;
 		}
+		if (c == 0xff) {
+			action |= TX_ESCAPE_IAC;
+		}
 		zmodem->tx_classes[c] = (uint8_t)action;
 	}
 	zmodem->tx_classes_initialized = true;
@@ -177,7 +181,8 @@ active_tx_classes(struct zmodem * zmodem)
 	return TX_ESCAPE_ALWAYS |
 	    (zmodem->escape_all_control_characters ?
 	    TX_ESCAPE_CONTROL | TX_ESCAPE_CR : 0U) |
-	    (zmodem->escape_8th_bit ? TX_ESCAPE_8TH : 0U);
+	    (zmodem->escape_8th_bit ? TX_ESCAPE_8TH : 0U) |
+	    (zmodem->escape_iac ? TX_ESCAPE_IAC : 0U);
 }
 
 static bool
@@ -199,6 +204,12 @@ tx(struct zmodem * zmodem,uint8_t c)
 {
 	if (tx_byte_needs_escape(zmodem,c,zmodem->last_sent,
 	    active_tx_classes(zmodem))) {
+		if (zmodem->escape_iac && c == UINT8_C(0xff)) {
+			if (tx_raw(zmodem,ZDLE) != 0) {
+				return -1;
+			}
+			return tx_raw(zmodem,ZRUB1);
+		}
 		return tx_esc(zmodem,c);
 	}
 	return tx_raw(zmodem,(int)c);
@@ -377,7 +388,12 @@ buffer_tx(struct zmodem * restrict zmodem,uint8_t c,
 {
 	if (tx_byte_needs_escape(zmodem,c,*previous,active)) {
 		buffer_raw(zmodem,ZDLE,used,previous);
-		buffer_raw(zmodem,(uint8_t)(c ^ 0x40),used,previous);
+		if (zmodem->escape_iac && c == UINT8_C(0xff)) {
+			buffer_raw(zmodem,ZRUB1,used,previous);
+		}
+		else {
+			buffer_raw(zmodem,(uint8_t)(c ^ 0x40),used,previous);
+		}
 	}
 	else {
 		buffer_raw(zmodem,c,used,previous);

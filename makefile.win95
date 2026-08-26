@@ -1,0 +1,95 @@
+# Open Watcom wmake makefile for 32-bit Windows 95.
+
+!ifndef WCC
+WCC=wcc386
+!endif
+!ifndef WCL
+WCL=wcl386
+!endif
+!ifndef WIN95_CPPFLAGS
+WIN95_CPPFLAGS=
+!endif
+!ifndef WIN95_CFLAGS
+WIN95_CFLAGS=
+!endif
+!ifndef BUILD_DIR
+BUILD_DIR=build/win95
+!endif
+!ifndef PYTHON
+PYTHON=python
+!endif
+!ifndef WIN95_RUNNER
+WIN95_RUNNER=
+!endif
+!ifndef MKDIR
+MKDIR=mkdir -p
+!endif
+
+COMMON_FLAGS=-bt=nt -3r -zastd=c99 -ze -w=4 -we -ox -os -zc
+COMPILE_FLAGS=$(COMMON_FLAGS) -dREDUCED_MEMORY=0 -dREDUCED_CRC=0 &
+	-i=win95 -i=. -i=$(%WATCOM)/h/nt $(WIN95_CPPFLAGS) $(WIN95_CFLAGS)
+LINK_FLAGS=-bt=nt -l=nt -3r -k8192
+
+COMMON_OBJECTS=$(BUILD_DIR)/zmdm.obj $(BUILD_DIR)/crctab.obj &
+	$(BUILD_DIR)/plat.obj
+PROGRAMS=$(BUILD_DIR)/zmtx.exe $(BUILD_DIR)/zmrx.exe
+TEST_PROGRAM=$(BUILD_DIR)/test_win95.exe
+WIN95_HEADERS=version.h zmodem.h zmdm.h crctab.h crctab_slicing.h &
+	win95/plat.h win95/zmodem_plat.h
+MOCK_FLAGS=-dZMODEM_WIN95_TEST_MOCKS=1 &
+	-dZMODEM_WIN95_GET_COMM_TIMEOUTS=mock_GetCommTimeouts &
+	-dZMODEM_WIN95_SET_COMM_TIMEOUTS=mock_SetCommTimeouts &
+	-dZMODEM_WIN95_CLEAR_COMM_ERROR=mock_ClearCommError &
+	-dZMODEM_WIN95_PURGE_COMM=mock_PurgeComm &
+	-dZMODEM_WIN95_READ_FILE=mock_ReadFile &
+	-dZMODEM_WIN95_WRITE_FILE=mock_WriteFile
+
+all: .SYMBOLIC prepare $(PROGRAMS)
+
+check: .SYMBOLIC all
+	$(PYTHON) tests/test_win95.py --static-only
+
+check-runtime: .SYMBOLIC check $(TEST_PROGRAM)
+	$(WIN95_RUNNER) $(TEST_PROGRAM)
+
+prepare: .SYMBOLIC
+	$(MKDIR) $(BUILD_DIR)
+
+$(BUILD_DIR)/zmtx.exe: $(BUILD_DIR)/zmtx.obj $(COMMON_OBJECTS)
+	$(WCL) $(LINK_FLAGS) -fm=$(BUILD_DIR)/zmtx.map &
+	    -fe=$@ $(BUILD_DIR)/zmtx.obj $(COMMON_OBJECTS) wsock32.lib
+
+$(BUILD_DIR)/zmrx.exe: $(BUILD_DIR)/zmrx.obj $(COMMON_OBJECTS)
+	$(WCL) $(LINK_FLAGS) -fm=$(BUILD_DIR)/zmrx.map &
+	    -fe=$@ $(BUILD_DIR)/zmrx.obj $(COMMON_OBJECTS) wsock32.lib
+
+$(TEST_PROGRAM): $(BUILD_DIR)/test_win95.obj $(BUILD_DIR)/test_plat.obj
+	$(WCL) $(LINK_FLAGS) -fe=$@ $(BUILD_DIR)/test_win95.obj &
+	    $(BUILD_DIR)/test_plat.obj wsock32.lib
+
+$(BUILD_DIR)/zmtx.obj: zmtx.c $(WIN95_HEADERS) makefile.win95
+	$(WCC) $(COMPILE_FLAGS) -fo=$@ zmtx.c
+
+$(BUILD_DIR)/zmrx.obj: zmrx.c $(WIN95_HEADERS) makefile.win95
+	$(WCC) $(COMPILE_FLAGS) -fo=$@ zmrx.c
+
+$(BUILD_DIR)/zmdm.obj: zmdm.c $(WIN95_HEADERS) makefile.win95
+	$(WCC) $(COMPILE_FLAGS) -fo=$@ zmdm.c
+
+$(BUILD_DIR)/crctab.obj: crctab.c $(WIN95_HEADERS) makefile.win95
+	$(WCC) $(COMPILE_FLAGS) -fo=$@ crctab.c
+
+$(BUILD_DIR)/plat.obj: win95/zmodem_plat.c $(WIN95_HEADERS) makefile.win95
+	$(WCC) $(COMPILE_FLAGS) -fo=$@ win95/zmodem_plat.c
+
+$(BUILD_DIR)/test_win95.obj: tests/test_win95.c $(WIN95_HEADERS) makefile.win95
+	$(WCC) $(COMPILE_FLAGS) $(MOCK_FLAGS) -fo=$@ tests/test_win95.c
+
+$(BUILD_DIR)/test_plat.obj: win95/zmodem_plat.c $(WIN95_HEADERS) makefile.win95
+	$(WCC) $(COMPILE_FLAGS) $(MOCK_FLAGS) -fo=$@ win95/zmodem_plat.c
+
+clean: .SYMBOLIC
+	rm -f $(BUILD_DIR)/*.obj $(BUILD_DIR)/*.err $(PROGRAMS) $(TEST_PROGRAM) &
+	    $(BUILD_DIR)/zmtx.map $(BUILD_DIR)/zmrx.map
+	rmdir $(BUILD_DIR) 2>/dev/null || true
+	rmdir build 2>/dev/null || true

@@ -56,6 +56,7 @@ struct zmodem_cpm_utimbuf {
 #define ZMODEM_PLAT_DEFAULT_JUNK_PATHNAMES true
 #define ZMODEM_PLAT_REQUIRES_NONSTREAMING(io) ((void)(io),false)
 #define ZMODEM_PLAT_RECEIVE_BUFFER_SIZE(io) ((void)(io),0U)
+#define ZMODEM_PLAT_ESCAPE_IAC(io) ((void)(io),false)
 
 int zmodem_cpm_clock_gettime(int,struct zmodem_cpm_timespec *);
 int zmodem_cpm_open(const char *,int,mode_t);

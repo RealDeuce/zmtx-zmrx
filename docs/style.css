@@ -266,7 +266,7 @@ h3 {
 
 .platform-grid {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(2, 1fr);
   border-top: 1px solid rgba(255, 255, 255, 0.25);
   border-bottom: 1px solid rgba(255, 255, 255, 0.25);
 }
@@ -274,14 +274,19 @@ h3 {
 .platform-grid article {
   padding: 2.5rem clamp(1rem, 4vw, 3.5rem) 2.8rem;
   border-right: 1px solid rgba(255, 255, 255, 0.25);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.25);
 }
 
-.platform-grid article:first-child {
+.platform-grid article:nth-child(odd) {
   padding-left: 0;
 }
 
-.platform-grid article:last-child {
+.platform-grid article:nth-child(even) {
   border-right: 0;
+}
+
+.platform-grid article:nth-last-child(-n + 2) {
+  border-bottom: 0;
 }
 
 .platform-grid h3 {
@@ -419,7 +424,9 @@ footer p {
   }
 
   .platform-grid article,
-  .platform-grid article:first-child {
+  .platform-grid article:nth-child(odd),
+  .platform-grid article:nth-child(even),
+  .platform-grid article:nth-last-child(-n + 2) {
     padding-left: 0;
     border-right: 0;
     border-bottom: 1px solid rgba(255, 255, 255, 0.25);

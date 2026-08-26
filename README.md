@@ -92,6 +92,21 @@ See the [DOS port notes](dos/README.md) for line options, memory-model details,
 hardware limitations, and DOSBox/X00 tests. This is a bundled secondary port;
 POSIX remains the only first-class platform.
 
+### Windows 95
+
+Open Watcom also builds 386-compatible Windows 95 console programs:
+
+```sh
+wmake -f makefile.win95
+```
+
+The programs accept a borrowed COM handle with `-cHANDLE` or a borrowed,
+connected Winsock socket with `-tSOCKET`. The optional `-i` flag uses ZMODEM's
+`ZDLE ZRUB1` representation for outbound Telnet IAC bytes without implementing
+the Telnet protocol. See the [Windows 95 port notes](win95/README.md) for the
+launcher contract, tests, and file-size limitations. This is another bundled
+secondary port; POSIX remains the only first-class platform.
+
 Optional end-to-end link tests exercise corruption recovery, asymmetric
 bandwidth, and interoperability with `lrzsz` when either `lsz`/`lrz` or
 `sz`/`rz` are installed:

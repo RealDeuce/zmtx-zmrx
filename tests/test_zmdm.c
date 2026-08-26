@@ -511,6 +511,57 @@ test_eighth_bit_escaping(void)
 }
 
 static bool
+test_iac_escaping(void)
+
+{
+	static const uint8_t payload[] = { 1U,UINT8_C(0xff),2U };
+	struct zmodem sender;
+	struct zmodem receiver;
+	struct fake_io sending_io;
+	struct fake_io receiving_io;
+	uint8_t received[sizeof(payload)];
+	uint8_t frame_end;
+	uint8_t header[HDRLEN] = { ZDATA,UINT8_C(0xff),0U,0U,0U };
+	size_t length;
+	bool passed;
+
+	initialize(&sender,&sending_io);
+	passed = expect(tx_data(&sender,ZCRCE,payload,sizeof(payload)) == 0,
+	    "transmit data without IAC escaping");
+	passed = expect(sending_io.output[1] == UINT8_C(0xff),
+	    "leave IAC raw by default") && passed;
+
+	initialize(&sender,&sending_io);
+	sender.escape_iac = true;
+	passed = expect(tx_data(&sender,ZCRCE,payload,sizeof(payload)) == 0,
+	    "transmit data with IAC escaping") && passed;
+	passed = expect(sending_io.output[1] == ZDLE &&
+	    sending_io.output[2] == ZRUB1,
+	    "encode IAC as ZDLE ZRUB1") && passed;
+
+	initialize(&receiver,&receiving_io);
+	(void)memcpy(receiving_io.input,sending_io.output,
+	    sending_io.output_length);
+	receiving_io.input_length = sending_io.output_length;
+	passed = expect(rx_data(&receiver,received,sizeof(received),&length,
+	    &frame_end) == ENDOFFRAME,"receive IAC-escaped packet") && passed;
+	passed = expect(length == sizeof(payload) &&
+	    memcmp(received,payload,sizeof(payload)) == 0,
+	    "IAC-escaped packet payload") && passed;
+
+	initialize(&sender,&sending_io);
+	sender.escape_iac = true;
+	sender.can_fcs_32 = true;
+	sender.want_fcs_32 = false;
+	passed = expect(tx_header(&sender,header) == 0,
+	    "transmit binary header with IAC escaping") && passed;
+	passed = expect(memchr(sending_io.output,ZRUB1,
+	    sending_io.output_length) != NULL,
+	    "encode IAC in binary header") && passed;
+	return passed;
+}
+
+static bool
 test_data_read_failures(bool use_crc32)
 {
 	static const uint8_t payload[] = { 1U,2U,3U };
@@ -692,6 +743,7 @@ test_data_packets(void)
 	passed = data_round_trip(false,false,ZCRCG,FRAMEOK) && passed;
 	passed = data_round_trip(false,false,ZCRCQ,FRAMEOK) && passed;
 	passed = test_eighth_bit_escaping() && passed;
+	passed = test_iac_escaping() && passed;
 	passed = test_data_read_failures(false) && passed;
 	passed = test_data_read_failures(true) && passed;
 	passed = test_receive_escape_variants() && passed;

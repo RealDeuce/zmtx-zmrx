@@ -165,6 +165,24 @@ jobs:
       - name: Test BIOS, UART, and FOSSIL transfers in DOSBox
         run: wmake -f makefile.dos check-emulator
 
+  win95:
+    name: Open Watcom Windows 95 build and transport tests
+    runs-on: windows-latest
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v6
+
+      - name: Install Open Watcom 2.0
+        uses: open-watcom/setup-watcom@v1
+        with:
+          version: '2.0'
+          tag: 2026-08-01-Build
+          target: nt
+
+      - name: Build and test Windows 95 programs
+        run: wmake -f makefile.win95 check-runtime MKDIR=mkdir
+
   release:
     name: Package source release
     if: startsWith(github.ref, 'refs/tags/')
@@ -172,6 +190,7 @@ jobs:
       - build
       - cpm
       - dos
+      - win95
       - link
       - quality
     runs-on: ubuntu-latest

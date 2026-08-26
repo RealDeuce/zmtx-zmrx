@@ -107,6 +107,7 @@ struct zmodem_plat_io {
 	((io)->active_backend == ZMODEM_DOS_BIOS ? 128U : \
 	 ((io)->active_backend == ZMODEM_DOS_UART && (io)->flow == 0U ? \
 	 ZBLOCKLEN : 0U))
+#define ZMODEM_PLAT_ESCAPE_IAC(io) ((void)(io),false)
 
 void zmodem_plat_io_init(struct zmodem_plat_io *,int,int);
 int zmodem_plat_ignore_sigpipe(void);

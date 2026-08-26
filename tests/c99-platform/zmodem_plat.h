@@ -49,6 +49,7 @@ struct zmodem_c99_utimbuf {
 #define ZMODEM_PLAT_DEFAULT_JUNK_PATHNAMES false
 #define ZMODEM_PLAT_REQUIRES_NONSTREAMING(io) ((void)(io),false)
 #define ZMODEM_PLAT_RECEIVE_BUFFER_SIZE(io) ((void)(io),0U)
+#define ZMODEM_PLAT_ESCAPE_IAC(io) ((void)(io),false)
 
 int zmodem_c99_clock_gettime(int,struct zmodem_c99_timespec *);
 int zmodem_c99_open(const char *,int,...);

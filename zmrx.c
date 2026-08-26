@@ -1011,6 +1011,7 @@ main(int argc,char ** argv)
 	if (i != 0) {
 		return cleanup(i);
 	}
+	protocol.escape_iac = ZMODEM_PLAT_ESCAPE_IAC(&plat_io);
 	if (ZMODEM_PLAT_REQUIRES_NONSTREAMING(&plat_io)) {
 		opt_s = true;
 	}
