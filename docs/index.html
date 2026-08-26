@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="description" content="zmtx/zmrx: compact, POSIX-first ZMODEM tools with a portable C99 core and CP/M 2.2, DOS, and Windows 95 ports.">
+  <meta name="description" content="zmtx/zmrx: compact, POSIX-first ZMODEM tools with a portable C99 core and 8-bit CP/M 2.2, 16-bit DOS, and 32-bit Windows 95 ports.">
   <title>zmtx/zmrx — ZMODEM tools</title>
   <link rel="stylesheet" href="style.css">
 </head>
@@ -42,13 +42,13 @@
 <b># ZedZap and bounded windows</b>
 <span>$</span> zmtx -8 -w32K disk.img
 
-<b># Cross-compile the CP/M 2.2 port</b>
+<b># Cross-compile the 8-bit CP/M 2.2 port</b>
 <span>$</span> make -f makefile.cpm
 
 <b># Build the 16-bit DOS port with Open Watcom</b>
 <span>$</span> wmake -f makefile.dos
 
-<b># Build the Windows 95 port with Open Watcom</b>
+<b># Build the 32-bit Windows 95 port with Open Watcom</b>
 <span>$</span> wmake -f makefile.win95</code></pre>
     </div>
   </header>
@@ -100,7 +100,7 @@
         </article>
         <article>
           <p class="platform-status">Bundled secondary port</p>
-          <h3>CP/M 2.2</h3>
+          <h3>8-bit CP/M 2.2</h3>
           <p>
             Z88DK builds reduced-memory <code>zmtx.com</code> and
             <code>zmrx.com</code> programs with a replaceable modem driver and
@@ -118,7 +118,7 @@
         </article>
         <article>
           <p class="platform-status">Bundled secondary port</p>
-          <h3>Windows 95</h3>
+          <h3>32-bit Windows 95</h3>
           <p>
             Open Watcom builds 386-compatible Win32 programs for borrowed COM
             handles or connected Winsock sockets, with optional ZMODEM
