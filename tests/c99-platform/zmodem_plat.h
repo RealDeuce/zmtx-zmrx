@@ -45,6 +45,8 @@ struct zmodem_c99_utimbuf {
 #define ZMODEM_PLAT_ERROR_INTERRUPTED 1
 #define ZMODEM_PLAT_ERROR_NOT_FOUND 2
 #define ZMODEM_PLAT_ERROR_IO 3
+#define ZMODEM_PLAT_DEFAULT_NONSTREAMING false
+#define ZMODEM_PLAT_DEFAULT_JUNK_PATHNAMES false
 
 int zmodem_c99_clock_gettime(int,struct zmodem_c99_timespec *);
 int zmodem_c99_open(const char *,int,...);
@@ -59,7 +61,8 @@ int zmodem_c99_utime(const char *,const struct zmodem_c99_utimbuf *);
 
 #define ZMODEM_PLAT_CLOCK_GETTIME(clock_id,value) \
 	zmodem_c99_clock_gettime((clock_id),(value))
-#define ZMODEM_PLAT_OPEN(...) zmodem_c99_open(__VA_ARGS__)
+#define ZMODEM_PLAT_OPEN(path,flags,mode) \
+	zmodem_c99_open((path),(flags),(mode))
 #define ZMODEM_PLAT_CLOSE(fd) zmodem_c99_close((fd))
 #define ZMODEM_PLAT_READ(fd,buffer,length) \
 	zmodem_c99_read((fd),(buffer),(length))
@@ -70,7 +73,9 @@ int zmodem_c99_utime(const char *,const struct zmodem_c99_utimbuf *);
 	zmodem_c99_stat_file((path),(status))
 #define ZMODEM_PLAT_FDOPEN(fd,mode) zmodem_c99_fdopen((fd),(mode))
 #define ZMODEM_PLAT_FTELLO(stream) zmodem_c99_ftell((stream))
+#define ZMODEM_PLAT_FFLUSH(stream) fflush((stream))
 #define ZMODEM_PLAT_UTIME(path,times) zmodem_c99_utime((path),(times))
+#define ZMODEM_PLAT_STRERROR(error) ((void)(error),"platform error")
 
 enum zmodem_plat_application {
 	ZMODEM_PLAT_ZMTX,

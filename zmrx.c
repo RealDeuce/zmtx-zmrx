@@ -70,10 +70,10 @@ static char * name;					/* pointer to the part of the filename used in the actua
 static bool opt_v = false;				/* show progress output */
 static bool opt_d = false;				/* show debug output */
 static bool opt_q = false;
-static bool opt_s = false;
+static bool opt_s = ZMODEM_PLAT_DEFAULT_NONSTREAMING;
 static bool opt_escape_control = false;
 static bool opt_escape_8th_bit = false;
-static bool junk_pathnames = false;			/* junk incoming path names or keep them */
+static bool junk_pathnames = ZMODEM_PLAT_DEFAULT_JUNK_PATHNAMES;	/* junk incoming path names or keep them */
 static uint8_t rx_data_subpacket[ZMAXSPLEN];
 static uint8_t attention_sequence[ZATTNLEN];
 
@@ -88,7 +88,7 @@ report_receiver_errno(const char * operation,const char * name,int error)
 {
 	if (!opt_q) {
 		(void)fprintf(stderr,"zmrx: %s %s: %s\n",operation,name,
-		    strerror(error));
+		    ZMODEM_PLAT_STRERROR(error));
 	}
 	receive_error_reported = true;
 }
@@ -185,9 +185,11 @@ file_position(FILE * file,uint32_t * position)
 	if (offset < 0) {
 		return false;
 	}
+#if UINTMAX_MAX > UINT32_MAX
 	if ((uintmax_t)offset > UINT32_MAX) {
 		return false;
 	}
+#endif
 
 	*position = (uint32_t)offset;
 	return true;
@@ -318,13 +320,15 @@ receive_file_data(char * name,FILE * fp)
 					break;
 				}
 			}
+#if SIZE_MAX > UINT32_MAX
 			if (n > UINT32_MAX) {
 				(void)tx_pos_header(&protocol,ZFERR,pos);
 				report_receiver_protocol("file block exceeds ZMODEM limit",
 				    ZMODEM_INVALID_DATA);
 				return ZFERR;
 			}
-			if (pos > UINT32_MAX - (uint32_t)n) {
+#endif
+			if (pos + (uint32_t)n < pos) {
 				(void)tx_pos_header(&protocol,ZFERR,pos);
 				report_receiver_protocol("file position exceeds ZMODEM limit",
 				    ZMODEM_INVALID_DATA);
@@ -693,9 +697,11 @@ receive_file(void)
 			}
 		}
 		if (recover) {
+#if UINTMAX_MAX > UINT32_MAX
 			if ((uintmax_t)s.st_size > UINT32_MAX) {
 				recover = false;
 			}
+#endif
 		}
 		if (recover) {
 			if (current_file_size_known) {
@@ -807,7 +813,7 @@ receive_file(void)
 	 * close and exit
 	 */
 
-	if (fflush(received_file) != 0) {
+	if (ZMODEM_PLAT_FFLUSH(received_file) != 0) {
 		int error = errno;
 
 		(void)tx_pos_header(&protocol,ZFERR,position);
@@ -855,7 +861,7 @@ cleanup(int status)
 	ZMODEM_PLAT_UTIMBUF tv;
 
 	if (fp) {
-		(void)fflush(fp);
+		(void)ZMODEM_PLAT_FFLUSH(fp);
 		(void)fclose(fp);
 		/*
 		 * set the time (so crash recovery may work)

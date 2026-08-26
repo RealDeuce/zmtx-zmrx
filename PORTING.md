@@ -50,6 +50,12 @@ The application sources require these constant macros:
 | `ZMODEM_PLAT_ERROR_INTERRUPTED` | `EINTR` |
 | `ZMODEM_PLAT_ERROR_NOT_FOUND` | `ENOENT` |
 | `ZMODEM_PLAT_ERROR_IO` | `EIO` |
+| `ZMODEM_PLAT_DEFAULT_NONSTREAMING` | `false` |
+| `ZMODEM_PLAT_DEFAULT_JUNK_PATHNAMES` | `false` |
+
+The two default macros must be constant Boolean expressions. They select the
+initial `-s` behavior and whether a receiver strips incoming directory names;
+command-line options may still change the selected behavior.
 
 The following function-like macros must preserve the corresponding POSIX
 return conventions and `errno` behavior.  The POSIX definitions expand
@@ -66,11 +72,13 @@ directly to the native calls and add no wrapper functions.
 | `ZMODEM_PLAT_STAT_FILE` | `stat` | Destination existence, size, and mtime |
 | `ZMODEM_PLAT_FDOPEN` | `fdopen` | Convert an exclusively created file to a stream |
 | `ZMODEM_PLAT_FTELLO` | `ftello` | Position including buffered stream data |
+| `ZMODEM_PLAT_FFLUSH` | `fflush` | Commit buffered received data, or defer this to the immediately following `fclose` |
 | `ZMODEM_PLAT_UTIME` | `utime` | Best-effort access/modification time restoration |
+| `ZMODEM_PLAT_STRERROR` | `strerror` | Human-readable text for a saved platform error |
 
 The generic sources use C99 `FILE` streams for received data and diagnostics.
 Consequently a port also needs the ordinary C99 behavior of `fopen`, `fwrite`,
-`fflush`, `fclose`, `fprintf`, `snprintf`, `errno`, and `strerror`.  Received
+`fclose`, `fprintf`, `snprintf`, and `errno`. Received
 stream positions must advance when `fwrite` accepts data even if an eventual
 flush reports a delayed error.
 
@@ -84,7 +92,11 @@ are accepted, but every conversion to the wire range is checked.
 `zmodem_plat_io_make_raw`, `zmodem_plat_io_restore`, and
 `zmodem_plat_io_close` provide the existing `struct zmodem_io` callbacks and
 cleanup lifecycle.  A transport callback must implement the result contract
-documented in `zmdm.h`, including nonblocking poll and bounded reads.
+documented in `zmdm.h`. A capable transport should implement nonblocking poll,
+purge, and bounded reads. A blocking-only target may instead return one byte
+per read, ignore the requested timeout, and make poll and purge no-ops; such a
+frontend should default to nonstreaming transfers and cannot enforce protocol
+deadlines while blocked.
 
 The application offers each leading command-line option to
 `zmodem_plat_parse_option` before its protocol options.  The hook returns
@@ -109,3 +121,19 @@ The reference implementation uses only:
 
 A non-POSIX port implements equivalent behavior only where its frontend uses
 the feature.  It does not need general POSIX compliance.
+
+## CP/M 2.2 reference port
+
+The `cpm` directory is a Z88DK classic-library implementation of this
+contract. Its `plat.h` supplies compiler compatibility, including the missing
+`inline` keyword, and its local `inttypes.h` provides only the C99 integer
+format and conversion facilities used by the frontends. It intentionally
+does not define `UINT64_MAX`, so the protocol core selects its portable 32-bit
+span scanner.
+
+The generic `cpm/rdrpun.c` transport uses blocking CP/M 2.2 `RDR:` and `PUN:`
+BDOS calls. Set `CPM_DRIVER` to replace it with a target-specific source file
+implementing `cpm/zmodem_cpm_driver.h`. The CP/M frontend also maps timestamps
+to best-effort no-ops, defaults to basename-only received files, and leaves
+the final stream flush to `fclose` because the Z88DK classic `fflush` does not
+work correctly on the `fdopen` stream used here.

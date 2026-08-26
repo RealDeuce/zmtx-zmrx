@@ -1,0 +1,5 @@
+diff --git a/chario.c b/chario.c
+--- a/chario.c
++++ b/chario.c
+@@ -480,0 +481 @@ DEV##_out(unsigned char c) { \
++		if (conf_##DEV##_raw) (void)setvbuf(DEV##_fp, NULL, _IONBF, 0); \

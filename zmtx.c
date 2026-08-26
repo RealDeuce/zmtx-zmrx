@@ -62,7 +62,7 @@ static struct zmodem_plat_io plat_io;
 
 static bool opt_v = false;				/* show progress output */
 static bool opt_d = false;				/* show debug output */
-static bool opt_s = false;				/* disable streaming */
+static bool opt_s = ZMODEM_PLAT_DEFAULT_NONSTREAMING;	/* disable streaming */
 static char * window_argument;
 static size_t subpacket_size = ZBLOCKLEN;		/* current data subpacket size */
 static size_t max_subpacket_size = ZBLOCKLEN;		/* selected maximum data subpacket size */
@@ -80,7 +80,7 @@ static void
 report_sender_errno(const char * operation,const char * name,int error)
 {
 	(void)fprintf(stderr,"zmtx: %s %s: %s\n",operation,name,
-	    strerror(error));
+	    ZMODEM_PLAT_STRERROR(error));
 	send_error_reported = true;
 }
 
@@ -355,10 +355,12 @@ send_from(const char * name,int file_fd)
 		report_sender_file("invalid file position",name);
 		return ZFERR;
 	}
+#if UINTMAX_MAX > UINT32_MAX
 	if ((uintmax_t)position > UINT32_MAX) {
 		report_sender_file("file position exceeds ZMODEM limit",name);
 		return ZFERR;
 	}
+#endif
 	acknowledged_position = (uint32_t)position;
 	last_ack_request = acknowledged_position;
 	/*
@@ -378,10 +380,12 @@ send_from(const char * name,int file_fd)
 			report_sender_file("invalid file position",name);
 			return ZFERR;
 		}
+#if UINTMAX_MAX > UINT32_MAX
 		if ((uintmax_t)position > UINT32_MAX) {
 			report_sender_file("file position exceeds ZMODEM limit",name);
 			return ZFERR;
 		}
+#endif
 		wire_position = (uint32_t)position;
 		if (window_enabled) {
 			while (wire_position - acknowledged_position >= window_size) {
@@ -435,12 +439,14 @@ send_from(const char * name,int file_fd)
 			report_sender_errno("can't read file",name,error);
 			return ZFERR;
 		}
+#if SIZE_MAX > UINT32_MAX
 		if (n > UINT32_MAX) {
 			(void)tx_pos_header(&protocol,ZFERR,wire_position);
 			report_sender_file("file block exceeds ZMODEM limit",name);
 			return ZFERR;
 		}
-		if (wire_position > UINT32_MAX - (uint32_t)n) {
+#endif
+		if (wire_position + (uint32_t)n < wire_position) {
 			(void)tx_pos_header(&protocol,ZFERR,wire_position);
 			report_sender_file("file position exceeds ZMODEM limit",name);
 			return ZFERR;
@@ -603,7 +609,8 @@ send_file(const char * name)
 	 * before doing a lot of unnecessary work check if the file exists
 	 */
 
-	file_fd = ZMODEM_PLAT_OPEN(name,ZMODEM_PLAT_OPEN_READ_ONLY);
+	file_fd = ZMODEM_PLAT_OPEN(name,ZMODEM_PLAT_OPEN_READ_ONLY,
+	    (ZMODEM_PLAT_MODE_T)0);
 
 	if (file_fd < 0) {
 		report_sender_errno("can't open file",name,errno);
@@ -622,11 +629,13 @@ send_file(const char * name)
 		(void)ZMODEM_PLAT_CLOSE(file_fd);
 		return SEND_FAILED;
 	}
+#if UINTMAX_MAX > UINT32_MAX
 	if ((uintmax_t)s.st_size > UINT32_MAX) {
 		report_sender_file("file is too large for ZMODEM",name);
 		(void)ZMODEM_PLAT_CLOSE(file_fd);
 		return SEND_FAILED;
 	}
+#endif
 	size = (uint32_t)s.st_size;
 	current_file_size = s.st_size;
 	if (difftime(s.st_mtime,(time_t)0) < 0) {

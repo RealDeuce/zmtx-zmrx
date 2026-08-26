@@ -89,11 +89,38 @@ jobs:
           LRZ: rz
         run: make check-link
 
+  cpm:
+    name: Z88DK CP/M build and tnylpo transfers
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v6
+
+      - name: Build CP/M programs with Z88DK 2.4
+        run: |
+          docker run --rm \
+            --volume "${PWD}:/src" --workdir /src \
+            z88dk/z88dk:2.4 make cpm
+
+      - name: Build native programs and test emulator
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential libncurses-dev
+          git clone --branch 1.2 --depth 1 \
+            https://gitlab.com/gbrein/tnylpo.git /tmp/tnylpo
+          patch --directory=/tmp/tnylpo --strip=1 \
+            < tests/tnylpo-unbuffered-output.patch
+          make --directory=/tmp/tnylpo tnylpo
+          make all
+          TNYLPO=/tmp/tnylpo/tnylpo python3 tests/test_cpm.py
+
   release:
     name: Package source release
     if: startsWith(github.ref, 'refs/tags/')
     needs:
       - build
+      - cpm
       - link
       - quality
     runs-on: ubuntu-latest

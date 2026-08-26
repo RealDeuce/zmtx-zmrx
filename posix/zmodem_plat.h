@@ -8,6 +8,7 @@
 #include <stdint.h>
 #include <errno.h>
 #include <stdio.h>
+#include <string.h>
 #include <fcntl.h>
 #include <sys/stat.h>
 #include <sys/types.h>
@@ -39,6 +40,8 @@
 #define ZMODEM_PLAT_ERROR_INTERRUPTED EINTR
 #define ZMODEM_PLAT_ERROR_NOT_FOUND ENOENT
 #define ZMODEM_PLAT_ERROR_IO EIO
+#define ZMODEM_PLAT_DEFAULT_NONSTREAMING false
+#define ZMODEM_PLAT_DEFAULT_JUNK_PATHNAMES false
 
 /* Direct POSIX call mappings: these deliberately add no wrapper calls. */
 #ifndef ZMODEM_PLAT_CLOCK_GETTIME
@@ -46,7 +49,7 @@
 	clock_gettime((clock_id),(value))
 #endif
 #ifndef ZMODEM_PLAT_OPEN
-#define ZMODEM_PLAT_OPEN(...) open(__VA_ARGS__)
+#define ZMODEM_PLAT_OPEN(path,flags,mode) open((path),(flags),(mode))
 #endif
 #ifndef ZMODEM_PLAT_CLOSE
 #define ZMODEM_PLAT_CLOSE(fd) close((fd))
@@ -69,8 +72,14 @@
 #ifndef ZMODEM_PLAT_FTELLO
 #define ZMODEM_PLAT_FTELLO(stream) ftello((stream))
 #endif
+#ifndef ZMODEM_PLAT_FFLUSH
+#define ZMODEM_PLAT_FFLUSH(stream) fflush((stream))
+#endif
 #ifndef ZMODEM_PLAT_UTIME
 #define ZMODEM_PLAT_UTIME(path,times) utime((path),(times))
+#endif
+#ifndef ZMODEM_PLAT_STRERROR
+#define ZMODEM_PLAT_STRERROR(error) strerror((error))
 #endif
 
 enum zmodem_plat_application {

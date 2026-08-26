@@ -54,6 +54,21 @@ that includes the protocol headers must be built consistently. Run
 `make clean` when switching profiles. Defining `REDUCED_MEMORY` directly for
 a non-make build has the same effect.
 
+### CP/M 2.2
+
+With Z88DK installed, build the CP/M 2.2 programs with:
+
+```sh
+make cpm
+```
+
+The target produces `zmtx.com` and `zmrx.com` using Z88DK's classic `+cpm`
+toolchain. It selects the reduced-memory profile automatically and uses a
+generic blocking `RDR:`/`PUN:` modem driver. Override `CPM_DRIVER` to compile
+a machine-specific serial overlay, or set `CPM_STREAMING=1` when that driver
+supports reliable overlapped I/O. See the [CP/M platform notes](cpm/README.md)
+for the driver contract, emulator tests, and CP/M file limitations.
+
 Optional end-to-end link tests exercise corruption recovery, asymmetric
 bandwidth, and interoperability with `lrzsz` when either `lsz`/`lrz` or
 `sz`/`rz` are installed:
