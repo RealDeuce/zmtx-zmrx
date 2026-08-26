@@ -10,7 +10,8 @@ Set `ZMODEM_PLATFORM` to a directory containing these three files:
 
 - `plat.h` is included before every other header in every translation unit.
   Use it for compiler workarounds, feature-test macros, replacement standard
-  headers, or adjustments such as undefining `UINT64_MAX`.
+  headers, or adjustments such as defining `ZMODEM_FORCE_32BIT_SPAN` on a
+  compiler that provides slow emulated 64-bit arithmetic.
 - `zmodem_plat.h` defines the type, constant, and function-call macros below
   and declares the transport and frontend hooks.
 - `zmodem_plat.c` implements those hooks and is compiled as `plat.o`.
@@ -52,6 +53,19 @@ The application sources require these constant macros:
 | `ZMODEM_PLAT_ERROR_IO` | `EIO` |
 | `ZMODEM_PLAT_DEFAULT_NONSTREAMING` | `false` |
 | `ZMODEM_PLAT_DEFAULT_JUNK_PATHNAMES` | `false` |
+
+`ZMODEM_PLAT_REQUIRES_NONSTREAMING(io)` is evaluated after the platform's
+post-parse hook has selected and opened its transport. It must be a Boolean
+expression and may force acknowledged blocks for a runtime-selected transport
+that cannot safely overlap input and output. The POSIX implementation expands
+it directly to `false`.
+
+`ZMODEM_PLAT_RECEIVE_BUFFER_SIZE(io)` is the maximum data segment a selected
+transport can receive before returning an acknowledgement, or zero when no
+additional limit is needed. It is used only when non-streaming operation is
+selected. POSIX expands it to zero; a polling serial implementation can use it
+to prevent an otherwise conforming sender from overrunning a shallow device
+buffer.
 
 The two default macros must be constant Boolean expressions. They select the
 initial `-s` behavior and whether a receiver strips incoming directory names;
@@ -127,9 +141,9 @@ the feature.  It does not need general POSIX compliance.
 The `cpm` directory is a Z88DK classic-library implementation of this
 contract. Its `plat.h` supplies compiler compatibility, including the missing
 `inline` keyword, and its local `inttypes.h` provides only the C99 integer
-format and conversion facilities used by the frontends. It intentionally
-does not define `UINT64_MAX`, so the protocol core selects its portable 32-bit
-span scanner.
+format and conversion facilities used by the frontends. Its prelude defines
+`ZMODEM_FORCE_32BIT_SPAN`, so the protocol core selects its portable 32-bit
+span scanner without altering standard-library limit macros.
 
 The generic `cpm/rdrpun.c` transport uses blocking CP/M 2.2 `RDR:` and `PUN:`
 BDOS calls. Build it with `make -f makefile.cpm`; set `CPM_DRIVER` to replace
@@ -138,3 +152,16 @@ it with a target-specific source file implementing
 best-effort no-ops, defaults to basename-only received files, and leaves the
 final stream flush to `fclose` because the Z88DK classic `fflush` does not work
 correctly on the `fdopen` stream used here.
+
+## 16-bit DOS reference port
+
+The `dos` directory implements the contract for Open Watcom's 16-bit C
+compiler and real-mode DOS. Its prelude explicitly selects the 32-bit span
+scanner. The build retains the normal protocol buffers but defines
+`REDUCED_CRC=1` independently to keep the small-model near-data segment below
+64 KiB.
+
+The frontend selects among FOSSIL, interrupt-driven 16550-compatible UART,
+and BIOS INT 14h transports at runtime. Its non-streaming and advertised
+receive-buffer macros describe the selected transport without adding wrapper
+calls to POSIX builds. Build and platform details are in `dos/README.md`.

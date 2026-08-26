@@ -117,7 +117,7 @@ elapsed_seconds(void)
 			seconds -= 1;
 		}
 	}
-	if (seconds <= 0) {
+	if (seconds == 0) {
 		return UINTMAX_C(1);
 	}
 	return (uintmax_t)seconds;
@@ -941,7 +941,7 @@ usage(void)
 	(void)printf("\n");
 	(void)printf("	-d          debug output\n");
 	(void)printf("	-v          verbose output\n");
-	(void)printf("	(only one of -n -c or -p may be specified)\n");
+	(void)printf("	(only one of -n -o or -p may be specified)\n");
 	zmodem_plat_usage(ZMODEM_PLAT_ZMTX);
 
 	exit(cleanup(1));
@@ -1050,6 +1050,14 @@ main(int argc,char ** argv)
 	    first_operand);
 	if (i != 0) {
 		return cleanup(i);
+	}
+	if (ZMODEM_PLAT_REQUIRES_NONSTREAMING(&plat_io)) {
+		if (window_size != 0U) {
+			(void)fprintf(stderr,
+			    "zmtx: selected transport cannot use a transmit window\n");
+			usage();
+		}
+		opt_s = true;
 	}
 
 	/*

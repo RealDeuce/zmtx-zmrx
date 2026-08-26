@@ -6,9 +6,7 @@
 #include <stdint.h>
 
 /* Always select the 32-bit span scanner on this memory-constrained target. */
-#ifdef UINT64_MAX
-#undef UINT64_MAX
-#endif
+#define ZMODEM_FORCE_32BIT_SPAN 1
 
 /* The classic sccz80 compiler accepts restrict but not inline. */
 #ifndef inline

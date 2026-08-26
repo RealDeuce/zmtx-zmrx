@@ -1,0 +1,91 @@
+# Open Watcom wmake makefile for 16-bit DOS.
+
+!ifndef WCC
+WCC=wcc
+!endif
+!ifndef WCL
+WCL=wcl
+!endif
+!ifndef DOS_MODEL
+DOS_MODEL=s
+!endif
+!ifndef DOS_CPPFLAGS
+DOS_CPPFLAGS=
+!endif
+!ifndef DOS_CFLAGS
+DOS_CFLAGS=
+!endif
+!ifndef BUILD_DIR
+BUILD_DIR=build/dos
+!endif
+!ifndef PYTHON
+PYTHON=python3
+!endif
+!ifndef DOSBOX
+DOSBOX=dosbox
+!endif
+!ifndef X00
+X00=$(BUILD_DIR)/X00.EXE
+!endif
+
+MODEL_FLAG=-m$(DOS_MODEL)
+COMMON_FLAGS=-bt=dos -0 $(MODEL_FLAG) -zastd=c99 -ze -w=4 -we -ox -os -zc
+COMPILE_FLAGS=$(COMMON_FLAGS) -dREDUCED_MEMORY=0 -dREDUCED_CRC=1 &
+	-i=dos -i=. $(DOS_CPPFLAGS) $(DOS_CFLAGS)
+LINK_FLAGS=-bt=dos -0 $(MODEL_FLAG) -k8192
+
+COMMON_OBJECTS=$(BUILD_DIR)/zmdm.obj $(BUILD_DIR)/crctab.obj &
+	$(BUILD_DIR)/plat.obj $(BUILD_DIR)/bios.obj $(BUILD_DIR)/fossil.obj &
+	$(BUILD_DIR)/uart.obj
+PROGRAMS=$(BUILD_DIR)/zmtx.exe $(BUILD_DIR)/zmrx.exe
+DOS_HEADERS=version.h zmodem.h zmdm.h crctab.h crctab_slicing.h &
+	dos/plat.h dos/zmodem_plat.h dos/zmodem_dos_serial.h
+
+all: .SYMBOLIC prepare $(PROGRAMS)
+
+check: .SYMBOLIC all
+	$(PYTHON) tests/test_dos.py --maps-only
+
+check-emulator: .SYMBOLIC check
+	$(PYTHON) tests/test_dos.py --dosbox $(DOSBOX) --x00 $(X00)
+
+prepare: .SYMBOLIC
+	mkdir -p $(BUILD_DIR)
+
+$(BUILD_DIR)/zmtx.exe: $(BUILD_DIR)/zmtx.obj $(COMMON_OBJECTS)
+	$(WCL) $(LINK_FLAGS) -fm=$(BUILD_DIR)/zmtx.map &
+	    -fe=$@ $(BUILD_DIR)/zmtx.obj $(COMMON_OBJECTS)
+
+$(BUILD_DIR)/zmrx.exe: $(BUILD_DIR)/zmrx.obj $(COMMON_OBJECTS)
+	$(WCL) $(LINK_FLAGS) -fm=$(BUILD_DIR)/zmrx.map &
+	    -fe=$@ $(BUILD_DIR)/zmrx.obj $(COMMON_OBJECTS)
+
+$(BUILD_DIR)/zmtx.obj: zmtx.c $(DOS_HEADERS) makefile.dos
+	$(WCC) $(COMPILE_FLAGS) -fo=$@ zmtx.c
+
+$(BUILD_DIR)/zmrx.obj: zmrx.c $(DOS_HEADERS) makefile.dos
+	$(WCC) $(COMPILE_FLAGS) -fo=$@ zmrx.c
+
+$(BUILD_DIR)/zmdm.obj: zmdm.c $(DOS_HEADERS) makefile.dos
+	$(WCC) $(COMPILE_FLAGS) -fo=$@ zmdm.c
+
+$(BUILD_DIR)/crctab.obj: crctab.c $(DOS_HEADERS) makefile.dos
+	$(WCC) $(COMPILE_FLAGS) -fo=$@ crctab.c
+
+$(BUILD_DIR)/plat.obj: dos/zmodem_plat.c $(DOS_HEADERS) makefile.dos
+	$(WCC) $(COMPILE_FLAGS) -fo=$@ dos/zmodem_plat.c
+
+$(BUILD_DIR)/bios.obj: dos/bios.c $(DOS_HEADERS) makefile.dos
+	$(WCC) $(COMPILE_FLAGS) -fo=$@ dos/bios.c
+
+$(BUILD_DIR)/fossil.obj: dos/fossil.c $(DOS_HEADERS) makefile.dos
+	$(WCC) $(COMPILE_FLAGS) -fo=$@ dos/fossil.c
+
+$(BUILD_DIR)/uart.obj: dos/uart.c $(DOS_HEADERS) makefile.dos
+	$(WCC) $(COMPILE_FLAGS) -fo=$@ dos/uart.c
+
+clean: .SYMBOLIC
+	rm -f $(BUILD_DIR)/*.obj $(BUILD_DIR)/*.err $(PROGRAMS) &
+	    $(BUILD_DIR)/zmtx.map $(BUILD_DIR)/zmrx.map
+	rmdir $(BUILD_DIR) 2>/dev/null || true
+	rmdir build 2>/dev/null || true

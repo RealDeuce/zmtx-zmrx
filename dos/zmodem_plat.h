@@ -1,88 +1,65 @@
-/* POSIX mappings for the ZMODEM platform contract. */
+/* Open Watcom 16-bit DOS mappings for the platform contract. */
 
-#ifndef ZMODEM_PLAT_H_INCLUDED
-#define ZMODEM_PLAT_H_INCLUDED
+#ifndef ZMODEM_DOS_ZMODEM_PLAT_H_INCLUDED
+#define ZMODEM_DOS_ZMODEM_PLAT_H_INCLUDED
 
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <errno.h>
+#include <fcntl.h>
+#include <io.h>
 #include <stdio.h>
 #include <string.h>
-#include <fcntl.h>
 #include <sys/stat.h>
 #include <sys/types.h>
-#include <termios.h>
 #include <time.h>
 #include <utime.h>
-#include <unistd.h>
 
 #include "zmdm.h"
 
-/* POSIX types used by the platform-neutral application sources. */
+struct zmodem_dos_timespec {
+	long tv_sec;
+	long tv_nsec;
+};
+
 #define ZMODEM_PLAT_OFF_T off_t
-#define ZMODEM_PLAT_SSIZE_T ssize_t
-#define ZMODEM_PLAT_TIMESPEC struct timespec
+#define ZMODEM_PLAT_SSIZE_T int
+#define ZMODEM_PLAT_TIMESPEC struct zmodem_dos_timespec
 #define ZMODEM_PLAT_STAT_T struct stat
 #define ZMODEM_PLAT_UTIMBUF struct utimbuf
 #define ZMODEM_PLAT_MODE_T mode_t
 
-/* POSIX constants used by the platform-neutral application sources. */
-#define ZMODEM_PLAT_STDIN STDIN_FILENO
-#define ZMODEM_PLAT_STDOUT STDOUT_FILENO
-#define ZMODEM_PLAT_CLOCK_MONOTONIC CLOCK_MONOTONIC
+#define ZMODEM_PLAT_STDIN 0
+#define ZMODEM_PLAT_STDOUT 1
+#define ZMODEM_PLAT_CLOCK_MONOTONIC 0
 #define ZMODEM_PLAT_SEEK_CURRENT SEEK_CUR
 #define ZMODEM_PLAT_SEEK_START SEEK_SET
-#define ZMODEM_PLAT_OPEN_READ_ONLY O_RDONLY
-#define ZMODEM_PLAT_OPEN_WRITE_ONLY O_WRONLY
+#define ZMODEM_PLAT_OPEN_READ_ONLY (O_RDONLY | O_BINARY)
+#define ZMODEM_PLAT_OPEN_WRITE_ONLY (O_WRONLY | O_BINARY)
 #define ZMODEM_PLAT_OPEN_CREATE O_CREAT
 #define ZMODEM_PLAT_OPEN_EXCLUSIVE O_EXCL
 #define ZMODEM_PLAT_ERROR_INTERRUPTED EINTR
 #define ZMODEM_PLAT_ERROR_NOT_FOUND ENOENT
 #define ZMODEM_PLAT_ERROR_IO EIO
 #define ZMODEM_PLAT_DEFAULT_NONSTREAMING false
-#define ZMODEM_PLAT_DEFAULT_JUNK_PATHNAMES false
-#define ZMODEM_PLAT_REQUIRES_NONSTREAMING(io) ((void)(io),false)
-#define ZMODEM_PLAT_RECEIVE_BUFFER_SIZE(io) ((void)(io),0U)
+#define ZMODEM_PLAT_DEFAULT_JUNK_PATHNAMES true
 
-/* Direct POSIX call mappings: these deliberately add no wrapper calls. */
-#ifndef ZMODEM_PLAT_CLOCK_GETTIME
-#define ZMODEM_PLAT_CLOCK_GETTIME(clock_id,value) \
-	clock_gettime((clock_id),(value))
-#endif
-#ifndef ZMODEM_PLAT_OPEN
+int zmodem_dos_clock_gettime(int,struct zmodem_dos_timespec *);
+
+#define ZMODEM_PLAT_CLOCK_GETTIME(id,value) \
+	zmodem_dos_clock_gettime((id),(value))
 #define ZMODEM_PLAT_OPEN(path,flags,mode) open((path),(flags),(mode))
-#endif
-#ifndef ZMODEM_PLAT_CLOSE
 #define ZMODEM_PLAT_CLOSE(fd) close((fd))
-#endif
-#ifndef ZMODEM_PLAT_READ
 #define ZMODEM_PLAT_READ(fd,buffer,length) read((fd),(buffer),(length))
-#endif
-#ifndef ZMODEM_PLAT_LSEEK
 #define ZMODEM_PLAT_LSEEK(fd,offset,origin) lseek((fd),(offset),(origin))
-#endif
-#ifndef ZMODEM_PLAT_FSTAT
 #define ZMODEM_PLAT_FSTAT(fd,status) fstat((fd),(status))
-#endif
-#ifndef ZMODEM_PLAT_STAT_FILE
 #define ZMODEM_PLAT_STAT_FILE(path,status) stat((path),(status))
-#endif
-#ifndef ZMODEM_PLAT_FDOPEN
 #define ZMODEM_PLAT_FDOPEN(fd,mode) fdopen((fd),(mode))
-#endif
-#ifndef ZMODEM_PLAT_FTELLO
-#define ZMODEM_PLAT_FTELLO(stream) ftello((stream))
-#endif
-#ifndef ZMODEM_PLAT_FFLUSH
+#define ZMODEM_PLAT_FTELLO(stream) ftell((stream))
 #define ZMODEM_PLAT_FFLUSH(stream) fflush((stream))
-#endif
-#ifndef ZMODEM_PLAT_UTIME
 #define ZMODEM_PLAT_UTIME(path,times) utime((path),(times))
-#endif
-#ifndef ZMODEM_PLAT_STRERROR
 #define ZMODEM_PLAT_STRERROR(error) strerror((error))
-#endif
 
 enum zmodem_plat_application {
 	ZMODEM_PLAT_ZMTX,
@@ -95,24 +72,49 @@ enum zmodem_plat_option_result {
 	ZMODEM_PLAT_OPTION_ACCEPTED = 1
 };
 
-struct zmodem_plat_io {
-	int input_fd;
-	int output_fd;
-	int owned_fd;
-	const char * line;
-	bool termios_saved;
-	struct termios saved_termios;
-	uint8_t output_buffer[ZMODEM_TX_BURST_CAPACITY];
-	size_t output_count;
+enum zmodem_dos_backend {
+	ZMODEM_DOS_AUTO,
+	ZMODEM_DOS_FOSSIL,
+	ZMODEM_DOS_UART,
+	ZMODEM_DOS_BIOS
 };
 
-void zmodem_plat_io_init(struct zmodem_plat_io *, int, int);
+enum zmodem_dos_flow {
+	ZMODEM_DOS_FLOW_XON = 1,
+	ZMODEM_DOS_FLOW_HARDWARE = 2
+};
+
+struct zmodem_plat_io {
+	enum zmodem_dos_backend requested_backend;
+	enum zmodem_dos_backend active_backend;
+	unsigned port;
+	unsigned base;
+	unsigned irq;
+	uint32_t rate;
+	unsigned flow;
+	bool base_selected;
+	bool irq_selected;
+	bool rate_selected;
+	bool flow_selected;
+	bool flow_none_selected;
+	bool initialized;
+	bool requires_nonstreaming;
+};
+
+#define ZMODEM_PLAT_REQUIRES_NONSTREAMING(io) \
+	((io)->requires_nonstreaming)
+#define ZMODEM_PLAT_RECEIVE_BUFFER_SIZE(io) \
+	((io)->active_backend == ZMODEM_DOS_BIOS ? 128U : \
+	 ((io)->active_backend == ZMODEM_DOS_UART && (io)->flow == 0U ? \
+	 ZBLOCKLEN : 0U))
+
+void zmodem_plat_io_init(struct zmodem_plat_io *,int,int);
 int zmodem_plat_ignore_sigpipe(void);
-int zmodem_plat_io_open(struct zmodem_plat_io *, const char *);
+int zmodem_plat_io_open(struct zmodem_plat_io *,const char *);
 int zmodem_plat_io_make_raw(struct zmodem_plat_io *);
 int zmodem_plat_io_restore(struct zmodem_plat_io *);
 int zmodem_plat_io_close(struct zmodem_plat_io *);
-void zmodem_plat_io_bind(struct zmodem_io *, struct zmodem_plat_io *);
+void zmodem_plat_io_bind(struct zmodem_io *,struct zmodem_plat_io *);
 enum zmodem_plat_option_result zmodem_plat_parse_option(
     struct zmodem_plat_io *,enum zmodem_plat_application,const char *,size_t *);
 int zmodem_plat_post_parse(struct zmodem_plat_io *,

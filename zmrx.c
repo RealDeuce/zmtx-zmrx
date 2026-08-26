@@ -130,7 +130,7 @@ elapsed_seconds(void)
 			seconds -= 1;
 		}
 	}
-	if (seconds <= 0) {
+	if (seconds == 0) {
 		return UINTMAX_C(1);
 	}
 	return (uintmax_t)seconds;
@@ -381,13 +381,17 @@ static int
 tx_zrinit(void)
 
 {
+	unsigned receive_buffer_size = ZMODEM_PLAT_RECEIVE_BUFFER_SIZE(&plat_io);
 	uint8_t zrinit_header[] = {
 		ZRINIT, 0, 0, 0, ZF0_CANBRK | ZF0_CANFDX | ZF0_CANOVIO | ZF0_CANFC32
 	};
 
 	if (opt_s) {
-		zrinit_header[ZP0] = (uint8_t)ZMAXSPLEN;
-		zrinit_header[ZP1] = (uint8_t)(ZMAXSPLEN >> 8);
+		if (receive_buffer_size == 0U || receive_buffer_size > ZMAXSPLEN) {
+			receive_buffer_size = ZMAXSPLEN;
+		}
+		zrinit_header[ZP0] = (uint8_t)receive_buffer_size;
+		zrinit_header[ZP1] = (uint8_t)(receive_buffer_size >> 8);
 		zrinit_header[ZF0] &= (uint8_t)~ZF0_CANOVIO;
 	}
 	if (opt_escape_control) {
@@ -902,7 +906,7 @@ usage(void)
 	(void)printf("	-s          request non-streaming transfers\n");
 	(void)printf("	-e          request control-character escaping\n");
 	(void)printf("	-b          request high-bit-byte escaping\n");
-	(void)printf("	(only one of -n -c or -p may be specified)\n");
+	(void)printf("	(only one of -n -o or -p may be specified)\n");
 	zmodem_plat_usage(ZMODEM_PLAT_ZMRX);
 
 	exit(cleanup(1));
@@ -1006,6 +1010,9 @@ main(int argc,char ** argv)
 	    first_operand);
 	if (i != 0) {
 		return cleanup(i);
+	}
+	if (ZMODEM_PLAT_REQUIRES_NONSTREAMING(&plat_io)) {
+		opt_s = true;
 	}
 
 	/*

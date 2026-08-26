@@ -116,12 +116,62 @@ jobs:
           CPM_BUILD_DIR=build/cpm TNYLPO=/tmp/tnylpo/tnylpo \
             python3 tests/test_cpm.py
 
+  dos:
+    name: Open Watcom 16-bit DOS build and DOSBox transfers
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v6
+
+      - name: Cache Open Watcom
+        id: watcom-cache
+        uses: actions/cache@v5
+        with:
+          path: ~/watcom
+          key: open-watcom-c-2026-08-01
+
+      - name: Install Open Watcom 2.0
+        if: steps.watcom-cache.outputs.cache-hit != 'true'
+        uses: open-watcom/setup-watcom@v1
+        with:
+          version: '2.0'
+          tag: 2026-08-01-Build
+          target: dos
+          environment: false
+
+      - name: Configure Open Watcom environment
+        run: |
+          echo "WATCOM=$HOME/watcom" >> "$GITHUB_ENV"
+          echo "INCLUDE=$HOME/watcom/h" >> "$GITHUB_ENV"
+          echo "$HOME/watcom/binl" >> "$GITHUB_PATH"
+
+      - name: Build native and 16-bit DOS programs
+        run: |
+          make all
+          wmake -f makefile.dos check
+
+      - name: Install DOSBox and obtain X00 1.50
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y dosbox unzip
+          curl --fail --location --retry 3 \
+            https://raw.githubusercontent.com/deadbeatz/mystic_a45/4df1f1fef349e2b192f6dbe2b29717bcd6742314/dosemu/drive_c/x00/x00150.zip \
+            --output /tmp/x00150.zip
+          echo '4577e1ad1d89a65209ca3b2be9522191c4c25119c9de4938adb2dd4f5a819eab  /tmp/x00150.zip' \
+            | sha256sum --check
+          unzip -p /tmp/x00150.zip X00.SYS > build/dos/X00.EXE
+
+      - name: Test BIOS, UART, and FOSSIL transfers in DOSBox
+        run: wmake -f makefile.dos check-emulator
+
   release:
     name: Package source release
     if: startsWith(github.ref, 'refs/tags/')
     needs:
       - build
       - cpm
+      - dos
       - link
       - quality
     runs-on: ubuntu-latest

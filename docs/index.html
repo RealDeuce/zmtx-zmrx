@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="description" content="zmtx/zmrx: compact, POSIX-first ZMODEM tools with a portable C99 core and a CP/M 2.2 port.">
+  <meta name="description" content="zmtx/zmrx: compact, POSIX-first ZMODEM tools with a portable C99 core and CP/M 2.2 and 16-bit DOS ports.">
   <title>zmtx/zmrx — ZMODEM tools</title>
   <link rel="stylesheet" href="style.css">
 </head>
@@ -43,7 +43,10 @@
 <span>$</span> zmtx -8 -w32K disk.img
 
 <b># Cross-compile the CP/M 2.2 port</b>
-<span>$</span> make -f makefile.cpm</code></pre>
+<span>$</span> make -f makefile.cpm
+
+<b># Build the 16-bit DOS port with Open Watcom</b>
+<span>$</span> wmake -f makefile.dos</code></pre>
     </div>
   </header>
 
@@ -99,6 +102,15 @@
             Z88DK builds reduced-memory <code>zmtx.com</code> and
             <code>zmrx.com</code> programs with a replaceable modem driver and
             generic blocking <code>RDR:</code>/<code>PUN:</code> support.
+          </p>
+        </article>
+        <article>
+          <p class="platform-status">Bundled secondary port</p>
+          <h3>16-bit DOS</h3>
+          <p>
+            Open Watcom builds 8086-compatible real-mode programs with full
+            transfer buffers and selectable FOSSIL, interrupt-driven 16550,
+            or BIOS serial I/O. DOSBox and X00 exercise every transport.
           </p>
         </article>
       </div>

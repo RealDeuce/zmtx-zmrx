@@ -54,6 +54,12 @@ that includes the protocol headers must be built consistently. Run
 `make clean` when switching profiles. Defining `REDUCED_MEMORY` directly for
 a non-make build has the same effect.
 
+The CRC table choice can also be made independently with
+`make REDUCED_CRC=1`.
+This retains the normal protocol buffers and block sizes but uses bytewise
+CRC-32, which is useful when data-segment space is tighter than transfer
+buffer space. Run `make clean` when changing this setting as well.
+
 ### CP/M 2.2
 
 With Z88DK installed, build the CP/M 2.2 programs with:
@@ -69,6 +75,22 @@ reduced-memory profile automatically and uses a generic blocking
 serial overlay, or set `CPM_STREAMING=1` when that driver supports reliable
 overlapped I/O. See the [CP/M platform notes](cpm/README.md) for the driver
 contract, emulator tests, and CP/M file limitations.
+
+### 16-bit DOS
+
+With the Open Watcom environment loaded, build the real-mode DOS programs
+using Open Watcom's own make:
+
+```sh
+wmake -f makefile.dos
+```
+
+This produces 8086-compatible `build/dos/zmtx.exe` and `build/dos/zmrx.exe`
+with the normal 8 KiB transfer buffers. A single executable can use a FOSSIL
+driver, an interrupt-driven 16550-compatible UART, or BIOS INT 14h serial I/O.
+See the [DOS port notes](dos/README.md) for line options, memory-model details,
+hardware limitations, and DOSBox/X00 tests. This is a bundled secondary port;
+POSIX remains the only first-class platform.
 
 Optional end-to-end link tests exercise corruption recovery, asymmetric
 bandwidth, and interoperability with `lrzsz` when either `lsz`/`lrz` or

@@ -384,7 +384,7 @@ buffer_tx(struct zmodem * restrict zmodem,uint8_t c,
 	}
 }
 
-#ifdef UINT64_MAX
+#if defined(UINT64_MAX) && !defined(ZMODEM_FORCE_32BIT_SPAN)
 typedef uint64_t span_word;
 #define SPAN_WORD_ONES UINT64_C(0x0101010101010101)
 #define SPAN_WORD_HIGHS UINT64_C(0x8080808080808080)
