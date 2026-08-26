@@ -1,0 +1,42 @@
+ZCC ?= zcc
+CPM_DRIVER ?= cpm/rdrpun.c
+CPM_STREAMING ?= 0
+CPM_CPPFLAGS ?=
+CPM_CFLAGS ?=
+BUILD_DIR ?= build/cpm
+MKDIR_P ?= mkdir -p
+PYTHON ?= python3
+TNYLPO ?= tnylpo
+
+CPM_COMMON_SOURCES = zmdm.c crctab.c cpm/zmodem_plat.c $(CPM_DRIVER)
+CPM_HEADERS = version.h zmodem.h zmdm.h crctab.h cpm/plat.h \
+	cpm/inttypes.h cpm/zmodem_plat.h cpm/zmodem_cpm_driver.h
+CPM_PROGRAMS = $(BUILD_DIR)/zmtx.com $(BUILD_DIR)/zmrx.com
+
+all: $(CPM_PROGRAMS)
+
+$(BUILD_DIR)/zmtx.com: zmtx.c $(CPM_COMMON_SOURCES) $(CPM_HEADERS) force
+	$(MKDIR_P) $(BUILD_DIR)
+	$(ZCC) +cpm -Icpm -I. -DREDUCED_MEMORY=1 \
+	    -DZMODEM_CPM_STREAMING=$(CPM_STREAMING) $(CPM_CPPFLAGS) \
+	    $(CPM_CFLAGS) zmtx.c $(CPM_COMMON_SOURCES) -o $@
+
+$(BUILD_DIR)/zmrx.com: zmrx.c $(CPM_COMMON_SOURCES) $(CPM_HEADERS) force
+	$(MKDIR_P) $(BUILD_DIR)
+	$(ZCC) +cpm -Icpm -I. -DREDUCED_MEMORY=1 \
+	    -DZMODEM_CPM_STREAMING=$(CPM_STREAMING) $(CPM_CPPFLAGS) \
+	    $(CPM_CFLAGS) zmrx.c $(CPM_COMMON_SOURCES) -o $@
+
+check: all
+	$(MAKE) -f makefile all
+	CPM_BUILD_DIR='$(BUILD_DIR)' TNYLPO='$(TNYLPO)' \
+	    $(PYTHON) tests/test_cpm.py
+
+clean:
+	rm -f $(CPM_PROGRAMS)
+	rmdir $(BUILD_DIR) 2>/dev/null || true
+	rmdir build 2>/dev/null || true
+
+force:
+
+.PHONY: all check clean force

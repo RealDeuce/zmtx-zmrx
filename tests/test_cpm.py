@@ -11,6 +11,9 @@ import time
 
 
 ROOT = Path(__file__).resolve().parents[1]
+CPM_BUILD_DIR = (
+    ROOT / os.environ.get("CPM_BUILD_DIR", "build/cpm")
+).resolve()
 TNYLPO = os.environ.get("TNYLPO", "tnylpo")
 TIMEOUT = float(os.environ.get("CPM_TEST_TIMEOUT", "30"))
 PAYLOAD = bytes(range(256)) * 8
@@ -132,8 +135,8 @@ def transfer(cpm_sender: bool) -> None:
         native_drive = base / "native"
         cpm_drive.mkdir()
         native_drive.mkdir()
-        shutil.copy2(ROOT / "zmtx.com", cpm_drive / "zmtx.com")
-        shutil.copy2(ROOT / "zmrx.com", cpm_drive / "zmrx.com")
+        shutil.copy2(CPM_BUILD_DIR / "zmtx.com", cpm_drive / "zmtx.com")
+        shutil.copy2(CPM_BUILD_DIR / "zmrx.com", cpm_drive / "zmrx.com")
 
         source_drive = cpm_drive if cpm_sender else native_drive
         destination_drive = native_drive if cpm_sender else cpm_drive
@@ -205,7 +208,7 @@ def main() -> None:
     with tempfile.TemporaryDirectory(prefix="zmodem-cpm-usage-") as temporary:
         directory = Path(temporary)
         for name in ("zmtx.com", "zmrx.com"):
-            shutil.copy2(ROOT / name, directory / name)
+            shutil.copy2(CPM_BUILD_DIR / name, directory / name)
             run_usage(directory / name)
 
     transfer(cpm_sender=True)

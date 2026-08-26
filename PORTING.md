@@ -132,8 +132,9 @@ does not define `UINT64_MAX`, so the protocol core selects its portable 32-bit
 span scanner.
 
 The generic `cpm/rdrpun.c` transport uses blocking CP/M 2.2 `RDR:` and `PUN:`
-BDOS calls. Set `CPM_DRIVER` to replace it with a target-specific source file
-implementing `cpm/zmodem_cpm_driver.h`. The CP/M frontend also maps timestamps
-to best-effort no-ops, defaults to basename-only received files, and leaves
-the final stream flush to `fclose` because the Z88DK classic `fflush` does not
-work correctly on the `fdopen` stream used here.
+BDOS calls. Build it with `make -f makefile.cpm`; set `CPM_DRIVER` to replace
+it with a target-specific source file implementing
+`cpm/zmodem_cpm_driver.h`. The CP/M frontend also maps timestamps to
+best-effort no-ops, defaults to basename-only received files, and leaves the
+final stream flush to `fclose` because the Z88DK classic `fflush` does not work
+correctly on the `fdopen` stream used here.

@@ -1,6 +1,7 @@
 *.o
 /zmtx
 /zmrx
+/build/
 /tests/test_crc
 /tests/test_posix_cleanup
 /tests/test_posix_io

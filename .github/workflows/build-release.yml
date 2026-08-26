@@ -101,7 +101,7 @@ jobs:
         run: |
           docker run --rm \
             --volume "${PWD}:/src" --workdir /src \
-            z88dk/z88dk:2.4 make cpm
+            z88dk/z88dk:2.4 make -f makefile.cpm
 
       - name: Build native programs and test emulator
         run: |
@@ -113,7 +113,8 @@ jobs:
             < tests/tnylpo-unbuffered-output.patch
           make --directory=/tmp/tnylpo tnylpo
           make all
-          TNYLPO=/tmp/tnylpo/tnylpo python3 tests/test_cpm.py
+          CPM_BUILD_DIR=build/cpm TNYLPO=/tmp/tnylpo/tnylpo \
+            python3 tests/test_cpm.py
 
   release:
     name: Package source release

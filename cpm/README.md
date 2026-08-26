@@ -3,13 +3,13 @@
 The CP/M build uses Z88DK's classic C library and its `+cpm` target:
 
 ```sh
-make cpm
+make -f makefile.cpm
 ```
 
-This produces `zmtx.com` and `zmrx.com`. It deliberately enables
-`REDUCED_MEMORY=1` and defaults to acknowledged, nonstreaming ZMODEM data.
-Define `CPM_STREAMING=1` only when the selected modem driver can reliably
-overlap input and output.
+This produces `build/cpm/zmtx.com` and `build/cpm/zmrx.com`. It deliberately
+enables `REDUCED_MEMORY=1` and defaults to acknowledged, nonstreaming ZMODEM
+data. Define `CPM_STREAMING=1` only when the selected modem driver can
+reliably overlap input and output.
 
 ## Modem driver
 
@@ -21,7 +21,7 @@ flush calls for these devices.
 A machine-specific overlay can replace it without changing the frontend:
 
 ```sh
-make CPM_DRIVER=path/to/driver.c cpm
+make -f makefile.cpm CPM_DRIVER=path/to/driver.c
 ```
 
 The replacement implements the functions declared by
@@ -36,7 +36,7 @@ belong in this overlay.
 Run the live native-to-CP/M and CP/M-to-native checks with:
 
 ```sh
-make TNYLPO=/path/to/tnylpo check-cpm
+make -f makefile.cpm TNYLPO=/path/to/tnylpo check
 ```
 
 tnylpo 1.2 and earlier use fully buffered stdio for raw `PUN:` files. That is
