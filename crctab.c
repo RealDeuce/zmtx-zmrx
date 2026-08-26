@@ -1,3 +1,4 @@
+#include "plat.h"
 
 #include "crctab.h"
 

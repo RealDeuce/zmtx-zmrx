@@ -32,8 +32,10 @@
  * and original author of zmtx/zmrx.
  */
 
-#include "zmdm_posix.h"
+#include "plat.h"
+#include "zmodem_plat.h"
 
+#include <ctype.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <signal.h>
@@ -44,26 +46,22 @@
 
 #include "zmdm.h"
 
-#ifndef ZMODEM_POSIX_CLOSE
-#define ZMODEM_POSIX_CLOSE close
+#ifndef ZMODEM_PLAT_SELECT
+#define ZMODEM_PLAT_SELECT(nfds,readfds,writefds,errorfds,timeout) \
+	select((nfds),(readfds),(writefds),(errorfds),(timeout))
 #endif
-#ifndef ZMODEM_POSIX_CLOCK_GETTIME
-#define ZMODEM_POSIX_CLOCK_GETTIME clock_gettime
+#ifndef ZMODEM_PLAT_TCSETATTR
+#define ZMODEM_PLAT_TCSETATTR(fd,action,attributes) \
+	tcsetattr((fd),(action),(attributes))
 #endif
-#ifndef ZMODEM_POSIX_SELECT
-#define ZMODEM_POSIX_SELECT select
-#endif
-#ifndef ZMODEM_POSIX_TCSETATTR
-#define ZMODEM_POSIX_TCSETATTR tcsetattr
-#endif
-#ifndef ZMODEM_POSIX_WRITE
-#define ZMODEM_POSIX_WRITE write
+#ifndef ZMODEM_PLAT_WRITE
+#define ZMODEM_PLAT_WRITE(fd,buffer,length) write((fd),(buffer),(length))
 #endif
 
 static int
 set_input_deadline(struct timespec * deadline,int timeout_ms)
 {
-	if (ZMODEM_POSIX_CLOCK_GETTIME(CLOCK_MONOTONIC,deadline) != 0) {
+	if (ZMODEM_PLAT_CLOCK_GETTIME(CLOCK_MONOTONIC,deadline) != 0) {
 		return -1;
 	}
 	deadline->tv_sec += (time_t)(timeout_ms / 1000);
@@ -82,7 +80,7 @@ input_time_remaining(const struct timespec * deadline,struct timeval * timeout)
 	time_t seconds;
 	long nanoseconds;
 
-	if (ZMODEM_POSIX_CLOCK_GETTIME(CLOCK_MONOTONIC,&now) != 0) {
+	if (ZMODEM_PLAT_CLOCK_GETTIME(CLOCK_MONOTONIC,&now) != 0) {
 		return -1;
 	}
 	if ((now.tv_sec > deadline->tv_sec) ||
@@ -140,7 +138,7 @@ wait_for_input(int fd,int timeout_ms)
 		}
 		FD_ZERO(&read_set);
 		FD_SET(fd,&read_set);
-		result = ZMODEM_POSIX_SELECT(fd + 1,&read_set,NULL,NULL,&timeout);
+		result = ZMODEM_PLAT_SELECT(fd + 1,&read_set,NULL,NULL,&timeout);
 		if (result >= 0) {
 			break;
 		}
@@ -156,7 +154,7 @@ static int
 posix_read(void * context,uint8_t * restrict buffer,size_t capacity,
     size_t * restrict count,int timeout_ms)
 {
-	struct zmodem_posix_io * io = context;
+	struct zmodem_plat_io * io = context;
 	ssize_t result;
 	int ready;
 
@@ -187,14 +185,14 @@ posix_read(void * context,uint8_t * restrict buffer,size_t capacity,
 static int
 posix_flush(void * context)
 {
-	struct zmodem_posix_io * io = context;
+	struct zmodem_plat_io * io = context;
 	size_t offset = 0U;
 
 	while (offset < io->output_count) {
 		ssize_t result;
 
 		for (;;) {
-			result = ZMODEM_POSIX_WRITE(io->output_fd,
+			result = ZMODEM_PLAT_WRITE(io->output_fd,
 			    &io->output_buffer[offset],
 			    io->output_count - offset);
 			if (result >= 0) {
@@ -221,7 +219,7 @@ posix_flush(void * context)
 static int
 posix_write(void * context,const uint8_t * restrict buffer,size_t length)
 {
-	struct zmodem_posix_io * io = context;
+	struct zmodem_plat_io * io = context;
 
 	while (length > 0U) {
 		size_t available = sizeof(io->output_buffer) - io->output_count;
@@ -242,7 +240,7 @@ posix_write(void * context,const uint8_t * restrict buffer,size_t length)
 static int
 posix_poll(void * context)
 {
-	struct zmodem_posix_io * io = context;
+	struct zmodem_plat_io * io = context;
 	int result = wait_for_input(io->input_fd,0);
 
 	return (result < 0) ? ZMODEM_IO_ERROR : result;
@@ -251,7 +249,7 @@ posix_poll(void * context)
 static int
 posix_purge(void * context)
 {
-	struct zmodem_posix_io * io = context;
+	struct zmodem_plat_io * io = context;
 	uint8_t byte;
 
 	for (;;) {
@@ -283,17 +281,18 @@ posix_purge(void * context)
 }
 
 void
-zmodem_posix_io_init(struct zmodem_posix_io * io,int input_fd,int output_fd)
+zmodem_plat_io_init(struct zmodem_plat_io * io,int input_fd,int output_fd)
 {
 	io->input_fd = input_fd;
 	io->output_fd = output_fd;
 	io->owned_fd = -1;
+	io->line = NULL;
 	io->termios_saved = false;
 	io->output_count = 0U;
 }
 
 int
-zmodem_posix_ignore_sigpipe(void)
+zmodem_plat_ignore_sigpipe(void)
 {
 	struct sigaction action;
 
@@ -306,7 +305,7 @@ zmodem_posix_ignore_sigpipe(void)
 }
 
 int
-zmodem_posix_io_open(struct zmodem_posix_io * io,const char * path)
+zmodem_plat_io_open(struct zmodem_plat_io * io,const char * path)
 {
 	int fd = open(path,O_RDWR | O_NOCTTY);
 
@@ -320,7 +319,7 @@ zmodem_posix_io_open(struct zmodem_posix_io * io,const char * path)
 }
 
 int
-zmodem_posix_io_make_raw(struct zmodem_posix_io * io)
+zmodem_plat_io_make_raw(struct zmodem_plat_io * io)
 {
 	struct termios attributes;
 
@@ -340,17 +339,17 @@ zmodem_posix_io_make_raw(struct zmodem_posix_io * io)
 	attributes.c_cflag |= CS8;
 	attributes.c_cc[VMIN] = 1;
 	attributes.c_cc[VTIME] = 0;
-	if (ZMODEM_POSIX_TCSETATTR(io->input_fd,TCSANOW,&attributes) != 0) {
+	if (ZMODEM_PLAT_TCSETATTR(io->input_fd,TCSANOW,&attributes) != 0) {
 		return -1;
 	}
 	return 0;
 }
 
 int
-zmodem_posix_io_restore(struct zmodem_posix_io * io)
+zmodem_plat_io_restore(struct zmodem_plat_io * io)
 {
 	if (io->termios_saved) {
-		if (ZMODEM_POSIX_TCSETATTR(io->input_fd,TCSANOW,
+		if (ZMODEM_PLAT_TCSETATTR(io->input_fd,TCSANOW,
 		    &io->saved_termios) != 0) {
 			return -1;
 		}
@@ -360,18 +359,18 @@ zmodem_posix_io_restore(struct zmodem_posix_io * io)
 }
 
 int
-zmodem_posix_io_close(struct zmodem_posix_io * io)
+zmodem_plat_io_close(struct zmodem_plat_io * io)
 {
 	int result = 0;
 
 	if (posix_flush(io) != ZMODEM_OK) {
 		result = -1;
 	}
-	if (zmodem_posix_io_restore(io) != 0) {
+	if (zmodem_plat_io_restore(io) != 0) {
 		result = -1;
 	}
 	if (io->owned_fd >= 0) {
-		if (ZMODEM_POSIX_CLOSE(io->owned_fd) != 0) {
+		if (ZMODEM_PLAT_CLOSE(io->owned_fd) != 0) {
 			result = -1;
 		}
 		io->owned_fd = -1;
@@ -380,7 +379,7 @@ zmodem_posix_io_close(struct zmodem_posix_io * io)
 }
 
 void
-zmodem_posix_io_bind(struct zmodem_io * interface,struct zmodem_posix_io * io)
+zmodem_plat_io_bind(struct zmodem_io * interface,struct zmodem_plat_io * io)
 {
 	interface->context = io;
 	interface->read = posix_read;
@@ -388,4 +387,54 @@ zmodem_posix_io_bind(struct zmodem_io * interface,struct zmodem_posix_io * io)
 	interface->flush = posix_flush;
 	interface->poll = posix_poll;
 	interface->purge = posix_purge;
+}
+
+enum zmodem_plat_option_result
+zmodem_plat_parse_option(struct zmodem_plat_io * io,
+    enum zmodem_plat_application application,const char * argument,
+    size_t * option_index)
+{
+	(void)application;
+	if (toupper((unsigned char)argument[*option_index]) != 'L') {
+		return ZMODEM_PLAT_OPTION_NOT_HANDLED;
+	}
+	io->line = &argument[*option_index + 1U];
+	*option_index = strlen(argument) - 1U;
+	return ZMODEM_PLAT_OPTION_ACCEPTED;
+}
+
+int
+zmodem_plat_post_parse(struct zmodem_plat_io * io,
+    enum zmodem_plat_application application,int argc,char * const * argv,
+    size_t first_operand)
+{
+	const char * program = application == ZMODEM_PLAT_ZMTX ? "zmtx" : "zmrx";
+
+	(void)argc;
+	(void)argv;
+	(void)first_operand;
+	if (zmodem_plat_ignore_sigpipe() != 0) {
+		(void)fprintf(stderr,
+		    "%s: can't configure broken-pipe handling\n",program);
+		return 2;
+	}
+	if (io->line != NULL) {
+		if (zmodem_plat_io_open(io,io->line) != 0) {
+			(void)fprintf(stderr,
+			    "%s can't open line for input/output %s\n",program,io->line);
+			return 2;
+		}
+	}
+	if (zmodem_plat_io_make_raw(io) != 0) {
+		(void)fprintf(stderr,"%s: can't configure transfer line\n",program);
+		return 2;
+	}
+	return 0;
+}
+
+void
+zmodem_plat_usage(enum zmodem_plat_application application)
+{
+	(void)application;
+	(void)printf("	-lline      line to use for io\n");
 }

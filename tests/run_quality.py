@@ -12,12 +12,15 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 COMMON = [
     "-std=c99",
-    "-D_POSIX_C_SOURCE=200112L",
-    "-D_FILE_OFFSET_BITS=64",
+    "-I",
+    str(ROOT / "posix"),
     "-I",
     str(ROOT),
 ]
-PRODUCTION = ["zmtx.c", "zmrx.c", "zmdm.c", "zmdm_posix.c", "crctab.c"]
+PRODUCTION = [
+    "zmtx.c", "zmrx.c", "zmdm.c", "posix/zmodem_plat.c", "crctab.c",
+]
+ROOT_PRODUCTION = ["zmtx.c", "zmrx.c", "zmdm.c", "crctab.c"]
 MINIMUM_LINE_COVERAGE = 65.0
 MINIMUM_BRANCH_COVERAGE = 90.0
 REQUIRED_MCDC_COVERAGE = 100.0
@@ -125,6 +128,31 @@ def static_analysis(directory):
         run([gcc, *COMMON, *diagnostics, "-fanalyzer", "-c", ROOT / source,
              "-o", output])
 
+    forbidden_headers = (
+        "<fcntl.h>", "<signal.h>", "<sys/select.h>", "<sys/stat.h>",
+        "<sys/types.h>", "<termios.h>", "<unistd.h>", "<utime.h>",
+    )
+    for source in ROOT.rglob("*.c"):
+        includes = [line for line in source.read_text(encoding="ascii").splitlines()
+                    if line.startswith("#include")]
+        if not includes or includes[0] != '#include "plat.h"':
+            raise SystemExit(f"{source.relative_to(ROOT)} does not include "
+                             '"plat.h" first')
+
+    for source in ROOT_PRODUCTION:
+        contents = (ROOT / source).read_text(encoding="ascii")
+        for header in forbidden_headers:
+            if header in contents:
+                raise SystemExit(f"root source {source} includes {header}")
+
+    c99_platform = ROOT / "tests/c99-platform"
+    c99_common = [
+        "-std=c99", "-I", c99_platform, "-I", ROOT, *diagnostics,
+    ]
+    for source in [*ROOT_PRODUCTION, "tests/c99-platform/zmodem_plat.c"]:
+        output = directory / (Path(source).stem + ".c99-platform.o")
+        run([clang, *c99_common, "-c", ROOT / source, "-o", output])
+
     no_uint64.write_text(
         "#include <stdint.h>\n#undef UINT64_MAX\n#undef UINT64_C\n",
         encoding="ascii",
@@ -161,7 +189,7 @@ def build_instrumented(directory, flags, compiler=None):
     if compiler is None:
         compiler, _, _ = llvm_toolchain()
     diagnostics = ["-Wall", "-Wextra", "-Werror", "-pedantic-errors"]
-    common_sources = ["zmdm.c", "zmdm_posix.c", "crctab.c"]
+    common_sources = ["zmdm.c", "posix/zmodem_plat.c", "crctab.c"]
     compile_program(compiler, directory / "zmtx",
                     ["zmtx.c", *common_sources], [*diagnostics, *flags])
     compile_program(compiler, directory / "zmrx",
@@ -179,7 +207,7 @@ def build_instrumented(directory, flags, compiler=None):
                     ["tests/test_zmrx.c", *common_sources],
                     [*diagnostics, *flags])
     compile_program(compiler, directory / "test_posix_io",
-                    ["tests/test_posix_io.c", "zmdm_posix.c"],
+                    ["tests/test_posix_io.c", "posix/zmodem_plat.c"],
                     [*diagnostics, *flags])
     compile_program(compiler, directory / "test_posix_cleanup",
                     ["tests/test_posix_cleanup.c"],

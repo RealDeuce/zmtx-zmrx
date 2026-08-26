@@ -36,6 +36,8 @@
  * zmodem primitives and other code common to zmtx and zmrx
  */
 
+#include "plat.h"
+
 #include <string.h>
 
 #include "zmodem.h"

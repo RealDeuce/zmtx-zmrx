@@ -21,6 +21,19 @@ make
 make check
 ```
 
+POSIX is the default platform. Select another platform implementation by
+pointing `ZMODEM_PLATFORM` at a directory containing `plat.h`,
+`zmodem_plat.h`, and `zmodem_plat.c`:
+
+```sh
+make clean
+make ZMODEM_PLATFORM=path/to/platform
+```
+
+The [platform porting contract](PORTING.md) documents the exact POSIX-shaped
+file, clock, transport, and frontend subset a platform must provide. POSIX
+maps these operations directly to the native APIs without added wrapper calls.
+
 Memory-constrained targets can select a standard-ZMODEM profile:
 
 ```sh

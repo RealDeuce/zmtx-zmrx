@@ -32,22 +32,20 @@
  * and original author of zmtx/zmrx.
  */
 
+#include "plat.h"
+
 #include <ctype.h>
 #include <errno.h>
 #include <stdio.h>
-#include <fcntl.h>
-#include <sys/types.h>
-#include <sys/stat.h>
 #include <inttypes.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
-#include <unistd.h>
 #include "version.h"
 
 #include "zmodem.h"
 #include "zmdm.h"
-#include "zmdm_posix.h"
+#include "zmodem_plat.h"
 
 #define MAX_RETRIES 10
 #define EXIT_TRANSFER_FAILED 4
@@ -60,9 +58,8 @@ enum send_result {
 };
 
 static struct zmodem protocol;
-static struct zmodem_posix_io posix_io;
+static struct zmodem_plat_io plat_io;
 
-static char * line = NULL;				/* device to use for io */
 static bool opt_v = false;				/* show progress output */
 static bool opt_d = false;				/* show debug output */
 static bool opt_s = false;				/* disable streaming */
@@ -74,8 +71,8 @@ static uint32_t window_size;
 static int n_files_remaining;
 static uint8_t tx_data_subpacket[ZMAXSPLEN];
 
-static off_t current_file_size;
-static struct timespec transfer_start;
+static ZMODEM_PLAT_OFF_T current_file_size;
+static ZMODEM_PLAT_TIMESPEC transfer_start;
 static bool transfer_clock_started;
 static bool send_error_reported;
 
@@ -105,13 +102,13 @@ report_sender_file(const char * operation,const char * name)
 static uintmax_t
 elapsed_seconds(void)
 {
-	struct timespec now;
+	ZMODEM_PLAT_TIMESPEC now;
 	time_t seconds;
 
 	if (!transfer_clock_started) {
 		return UINTMAX_C(1);
 	}
-	if (clock_gettime(CLOCK_MONOTONIC,&now) != 0) {
+	if (ZMODEM_PLAT_CLOCK_GETTIME(ZMODEM_PLAT_CLOCK_MONOTONIC,&now) != 0) {
 		return UINTMAX_C(1);
 	}
 	seconds = now.tv_sec - transfer_start.tv_sec;
@@ -127,9 +124,9 @@ elapsed_seconds(void)
 }
 
 static bool
-file_position(int file_fd,off_t * position)
+file_position(int file_fd,ZMODEM_PLAT_OFF_T * position)
 {
-	off_t result = lseek(file_fd,(off_t)0,SEEK_CUR);
+	ZMODEM_PLAT_OFF_T result = ZMODEM_PLAT_LSEEK(file_fd,(ZMODEM_PLAT_OFF_T)0,ZMODEM_PLAT_SEEK_CURRENT);
 
 	if (result < 0) {
 		return false;
@@ -146,14 +143,14 @@ read_file_block(int file_fd,uint8_t * restrict buffer,size_t capacity,
 
 	*end_of_file = false;
 	while (used < capacity) {
-		ssize_t result;
+		ZMODEM_PLAT_SSIZE_T result;
 
 		for (;;) {
-			result = read(file_fd,&buffer[used],capacity - used);
+			result = ZMODEM_PLAT_READ(file_fd,&buffer[used],capacity - used);
 			if (result >= 0) {
 				break;
 			}
-			if (errno != EINTR) {
+			if (errno != ZMODEM_PLAT_ERROR_INTERRUPTED) {
 				break;
 			}
 		}
@@ -301,10 +298,10 @@ show_progress(const char * name,int file_fd)
 	uintmax_t duration;
 	intmax_t cps;
 	int percentage;
-	off_t position;
+	ZMODEM_PLAT_OFF_T position;
 
 	if (!file_position(file_fd,&position)) {
-		position = (off_t)-1;
+		position = (ZMODEM_PLAT_OFF_T)-1;
 	}
 
 	percentage = 100;
@@ -344,7 +341,7 @@ send_from(const char * name,int file_fd)
 	size_t n;
 	size_t read_size;
 	size_t segment_sent = 0;
-	off_t position;
+	ZMODEM_PLAT_OFF_T position;
 	uint32_t acknowledged_position;
 	uint32_t acknowledgement_interval = window_size / 4;
 	uint32_t last_ack_request;
@@ -448,7 +445,7 @@ send_from(const char * name,int file_fd)
 			report_sender_file("file position exceeds ZMODEM limit",name);
 			return ZFERR;
 		}
-		position += (off_t)n;
+		position += (ZMODEM_PLAT_OFF_T)n;
 		stop_after_ack = wait_each_block && end_of_file;
 		if ((n == 0U) || (!wait_each_block && end_of_file)) {
 			frame_end = ZCRCE;
@@ -556,8 +553,8 @@ static bool
 seek_sender(int file_fd,uint32_t position)
 
 {
-	off_t offset = (off_t)position;
-	struct stat s;
+	ZMODEM_PLAT_OFF_T offset = (ZMODEM_PLAT_OFF_T)position;
+	ZMODEM_PLAT_STAT_T s;
 
 	if (offset < 0) {
 		return false;
@@ -565,7 +562,7 @@ seek_sender(int file_fd,uint32_t position)
 	if ((uintmax_t)offset != position) {
 		return false;
 	}
-	if (fstat(file_fd,&s) != 0) {
+	if (ZMODEM_PLAT_FSTAT(file_fd,&s) != 0) {
 		return false;
 	}
 	if (s.st_size < 0) {
@@ -574,7 +571,7 @@ seek_sender(int file_fd,uint32_t position)
 	if ((uintmax_t)position > (uintmax_t)s.st_size) {
 		return false;
 	}
-	return lseek(file_fd,offset,SEEK_SET) == offset;
+	return ZMODEM_PLAT_LSEEK(file_fd,offset,ZMODEM_PLAT_SEEK_START) == offset;
 }
 
 static enum send_result
@@ -585,7 +582,7 @@ send_file(const char * name)
 	uint32_t pos;
 	uint32_t furthest_recovery_position;
 	uint32_t size;
-	struct stat s;
+	ZMODEM_PLAT_STAT_T s;
 	int file_fd;
 	uintmax_t wire_mdate;
 	char * p;
@@ -606,28 +603,28 @@ send_file(const char * name)
 	 * before doing a lot of unnecessary work check if the file exists
 	 */
 
-	file_fd = open(name,O_RDONLY);
+	file_fd = ZMODEM_PLAT_OPEN(name,ZMODEM_PLAT_OPEN_READ_ONLY);
 
 	if (file_fd < 0) {
 		report_sender_errno("can't open file",name,errno);
 		return SEND_FAILED;
 	}
 
-	if (fstat(file_fd,&s) != 0) {
+	if (ZMODEM_PLAT_FSTAT(file_fd,&s) != 0) {
 		int error = errno;
 
 		report_sender_errno("can't stat file",name,error);
-		(void)close(file_fd);
+		(void)ZMODEM_PLAT_CLOSE(file_fd);
 		return SEND_FAILED;
 	}
 	if (s.st_size < 0) {
 		report_sender_file("file is too large for ZMODEM",name);
-		(void)close(file_fd);
+		(void)ZMODEM_PLAT_CLOSE(file_fd);
 		return SEND_FAILED;
 	}
 	if ((uintmax_t)s.st_size > UINT32_MAX) {
 		report_sender_file("file is too large for ZMODEM",name);
-		(void)close(file_fd);
+		(void)ZMODEM_PLAT_CLOSE(file_fd);
 		return SEND_FAILED;
 	}
 	size = (uint32_t)s.st_size;
@@ -713,7 +710,7 @@ send_file(const char * name)
 
 	if (strlen(n) >= sizeof(tx_data_subpacket)) {
 		report_sender_file("file name is too long",name);
-		(void)close(file_fd);
+		(void)ZMODEM_PLAT_CLOSE(file_fd);
 		return SEND_FAILED;
 	}
 	memcpy(p,n,strlen(n) + 1);
@@ -723,12 +720,12 @@ send_file(const char * name)
 		size,wire_mdate,n_files_remaining);
 	if (written < 0) {
 		report_sender_file("can't encode file metadata",name);
-		(void)close(file_fd);
+		(void)ZMODEM_PLAT_CLOSE(file_fd);
 		return SEND_FAILED;
 	}
 	if ((size_t)written >= remaining) {
 		report_sender_file("file metadata is too long",name);
-		(void)close(file_fd);
+		(void)ZMODEM_PLAT_CLOSE(file_fd);
 		return SEND_FAILED;
 	}
 	p += (size_t)written + 1;
@@ -744,14 +741,14 @@ send_file(const char * name)
 		if (tx_header(&protocol,zfile_frame) != 0) {
 			report_sender_protocol("can't send file header",
 			    ZMODEM_IO_ERROR);
-			(void)close(file_fd);
+			(void)ZMODEM_PLAT_CLOSE(file_fd);
 			return SEND_FAILED;
 		}
 		if (tx_data(&protocol,ZCRCW,tx_data_subpacket,
 		    (size_t)(p - (char *)tx_data_subpacket)) != 0) {
 			report_sender_protocol("can't send file information",
 			    ZMODEM_IO_ERROR);
-			(void)close(file_fd);
+			(void)ZMODEM_PLAT_CLOSE(file_fd);
 			return SEND_FAILED;
 		}
 	
@@ -777,7 +774,7 @@ send_file(const char * name)
 		}
 
 		if (type == ZSKIP) {
-			(void)close(file_fd);
+			(void)ZMODEM_PLAT_CLOSE(file_fd);
 			if (opt_v) {
 				(void)fprintf(stderr,"zmtx: skipped file \"%s\"                       \n",name);
 			}
@@ -789,12 +786,12 @@ send_file(const char * name)
 	}
 	if (type != ZRPOS) {
 		report_sender_protocol("can't start file transfer",type);
-		(void)close(file_fd);
+		(void)ZMODEM_PLAT_CLOSE(file_fd);
 		return SEND_FAILED;
 	}
 
 	transfer_clock_started =
-	    clock_gettime(CLOCK_MONOTONIC,&transfer_start) == 0;
+	    ZMODEM_PLAT_CLOCK_GETTIME(ZMODEM_PLAT_CLOCK_MONOTONIC,&transfer_start) == 0;
 	pos = zmodem_header_position(protocol.rxd_header);
 	furthest_recovery_position = pos;
 	attempts = 0U;
@@ -807,12 +804,12 @@ send_file(const char * name)
 		if (!seek_sender(file_fd,pos)) {
 			(void)tx_pos_header(&protocol,ZFERR,pos);
 			report_sender_file("can't seek file to requested position",name);
-			(void)close(file_fd);
+			(void)ZMODEM_PLAT_CLOSE(file_fd);
 			return SEND_FAILED;
 		}
 		type = send_from(n,file_fd);
 		if (type == ZSKIP) {
-			(void)close(file_fd);
+			(void)ZMODEM_PLAT_CLOSE(file_fd);
 			return SEND_SKIPPED;
 		}
 		if (type == ZRPOS) {
@@ -844,7 +841,7 @@ send_file(const char * name)
 			if (!send_error_reported) {
 				report_sender_protocol("file-data transfer failed",type);
 			}
-			(void)close(file_fd);
+			(void)ZMODEM_PLAT_CLOSE(file_fd);
 			return SEND_FAILED;
 		}
 
@@ -853,13 +850,13 @@ send_file(const char * name)
 			if (tx_hex_header(&protocol,zeof_frame) != 0) {
 				report_sender_protocol("can't send end-of-file header",
 				    ZMODEM_IO_ERROR);
-				(void)close(file_fd);
+				(void)ZMODEM_PLAT_CLOSE(file_fd);
 				return SEND_FAILED;
 			}
 			type = rx_header(&protocol,10000);
 			if (type == ZRINIT) {
 				parse_zrinit();
-				(void)close(file_fd);
+				(void)ZMODEM_PLAT_CLOSE(file_fd);
 				if (opt_v) {
 					(void)fprintf(stderr,"zmtx: sent file \"%s\"                                    \n",name);
 				}
@@ -881,25 +878,25 @@ send_file(const char * name)
 				break;
 			}
 			if (type == ZSKIP) {
-				(void)close(file_fd);
+				(void)ZMODEM_PLAT_CLOSE(file_fd);
 				return SEND_SKIPPED;
 			}
 			if (type != ZACK) {
 				if (type == TIMEOUT) {
 					continue;
 				}
-				(void)close(file_fd);
+				(void)ZMODEM_PLAT_CLOSE(file_fd);
 				return SEND_FAILED;
 			}
 		}
 		if (!resume) {
 			report_sender_protocol("can't finish file transfer",type);
-			(void)close(file_fd);
+			(void)ZMODEM_PLAT_CLOSE(file_fd);
 			return SEND_FAILED;
 		}
 	}
 
-	(void)close(file_fd);
+	(void)ZMODEM_PLAT_CLOSE(file_fd);
 	report_sender_protocol("file transfer retries exhausted",type);
 	return SEND_FAILED;
 }
@@ -908,7 +905,7 @@ static int
 cleanup(int status)
 
 {
-	if (zmodem_posix_io_close(&posix_io) != 0) {
+	if (zmodem_plat_io_close(&plat_io) != 0) {
 		(void)fprintf(stderr,"zmtx: transfer line cleanup failed\n");
 		if (status == 0) {
 			status = EXIT_CLEANUP_FAILED;
@@ -923,7 +920,6 @@ usage(void)
 {
 	(void)printf("zmtx %s Copyright (c) 1994 Stephen Hurd\n",VERSION);
 	(void)printf("usage : zmtx options files\n");
-	(void)printf("	-lline      line to use for io\n");
 #if !REDUCED_MEMORY
 	(void)printf("	-4          use ZedZap 4 KiB data subpackets\n");
 	(void)printf("	-8          use ZedZap 8 KiB data subpackets\n");
@@ -937,6 +933,7 @@ usage(void)
 	(void)printf("	-d          debug output\n");
 	(void)printf("	-v          verbose output\n");
 	(void)printf("	(only one of -n -c or -p may be specified)\n");
+	zmodem_plat_usage(ZMODEM_PLAT_ZMTX);
 
 	exit(cleanup(1));
 }
@@ -947,27 +944,36 @@ main(int argc,char ** argv)
 {
 	bool transfer_failed = false;
 	int i;
+	size_t argument_index = 1U;
+	size_t first_operand;
+	size_t file_index;
 	struct zmodem_io io;
 
-	if (zmodem_posix_ignore_sigpipe() != 0) {
-		(void)fprintf(stderr,"zmtx: can't configure broken-pipe handling\n");
-		return 2;
-	}
-	zmodem_posix_io_init(&posix_io,STDIN_FILENO,STDOUT_FILENO);
-	zmodem_posix_io_bind(&io,&posix_io);
+	zmodem_plat_io_init(&plat_io,ZMODEM_PLAT_STDIN,ZMODEM_PLAT_STDOUT);
+	zmodem_plat_io_bind(&io,&plat_io);
 	if (zmodem_init(&protocol,&io) != ZMODEM_OK) {
 		(void)fprintf(stderr,"zmtx: can't initialize protocol state\n");
 		return 2;
 	}
 
-	argv++;
-	while (--argc > 0 && ((*argv)[0] == '-')) {
-		const char * argument = argv[0];
+	while ((argument_index < (size_t)argc) &&
+	    (argv[argument_index][0] == '-')) {
+		const char * argument = argv[argument_index];
 		size_t option_index;
 
 		for (option_index = 1U; argument[option_index] != '\0';
 		    option_index++) {
+			enum zmodem_plat_option_result platform_result;
 			int option = toupper((unsigned char)argument[option_index]);
+
+			platform_result = zmodem_plat_parse_option(&plat_io,
+			    ZMODEM_PLAT_ZMTX,argument,&option_index);
+			if (platform_result == ZMODEM_PLAT_OPTION_INVALID) {
+				usage();
+			}
+			if (platform_result == ZMODEM_PLAT_OPTION_ACCEPTED) {
+				continue;
+			}
 
 			switch (option) {
 #if !REDUCED_MEMORY
@@ -1000,18 +1006,15 @@ main(int argc,char ** argv)
 				case 'P':
 					protocol.management_protect = true;
 					break;
-				case 'L':
-					line = (char *)&argument[option_index + 1U];
-					option_index = strlen(argument) - 1U;
-					break;
 				default:
 					(void)printf("zmtx: bad option %c\n",
 					    argument[option_index]);
 					usage();
 			}
 		}
-		argv++;
+		argument_index += 1U;
 	}
+	first_operand = argument_index;
 
 	if (opt_d) {
 		opt_v = true;
@@ -1029,24 +1032,15 @@ main(int argc,char ** argv)
 
 	if (((unsigned)protocol.management_newer +
 	    (unsigned)protocol.management_clobber +
-	    (unsigned)protocol.management_protect) > 1U || argc == 0) {
+	    (unsigned)protocol.management_protect) > 1U ||
+	    first_operand >= (size_t)argc) {
 		usage();
 	}
 
-	if (line != NULL) {
-		if (zmodem_posix_io_open(&posix_io,line) != 0) {
-			(void)fprintf(stderr,"zmtx can't open line for input/output %s\n",line);
-			exit(2);
-		}
-	}
-
-	/*
-	 * set the io device to transparent
-	 */
-
-	if (zmodem_posix_io_make_raw(&posix_io) != 0) {
-		(void)fprintf(stderr,"zmtx: can't configure transfer line\n");
-		return cleanup(2);
+	i = zmodem_plat_post_parse(&plat_io,ZMODEM_PLAT_ZMTX,argc,argv,
+	    first_operand);
+	if (i != 0) {
+		return cleanup(i);
 	}
 
 	/*
@@ -1131,22 +1125,22 @@ main(int argc,char ** argv)
 	 * and send each file in turn
 	 */
 
-	n_files_remaining = argc;
+	n_files_remaining = argc - (int)first_operand;
+	file_index = first_operand;
 
-	while (argc) {
-		enum send_result result = send_file(*argv);
+	while (file_index < (size_t)argc) {
+		enum send_result result = send_file(argv[file_index]);
 
 		if (result == SEND_FAILED) {
 			if (!send_error_reported) {
-				report_sender_file("file transfer failed",*argv);
+				report_sender_file("file transfer failed",argv[file_index]);
 			}
 			transfer_failed = true;
 			break;
 		}
 
 		n_files_remaining--;
-		argc--;
-		argv++;
+		file_index += 1U;
 	}
 
 	/*

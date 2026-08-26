@@ -1,3 +1,5 @@
+#include "plat.h"
+
 #include <inttypes.h>
 #include <stddef.h>
 #include <stdint.h>

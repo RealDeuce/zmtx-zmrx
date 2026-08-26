@@ -1,4 +1,4 @@
-#define _XOPEN_SOURCE 600
+#include "plat.h"
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -15,7 +15,7 @@
 #include <unistd.h>
 
 #include "zmdm.h"
-#include "zmdm_posix.h"
+#include "zmodem_plat.h"
 
 static int wrapped_tcsetattr(int, int, const struct termios *);
 static ssize_t wrapped_write(int, const void *, size_t);
@@ -23,17 +23,25 @@ static int wrapped_close(int);
 static int wrapped_clock_gettime(clockid_t, struct timespec *);
 static int wrapped_select(int, fd_set *, fd_set *, fd_set *, struct timeval *);
 
-#define ZMODEM_POSIX_TCSETATTR wrapped_tcsetattr
-#define ZMODEM_POSIX_WRITE wrapped_write
-#define ZMODEM_POSIX_CLOSE wrapped_close
-#define ZMODEM_POSIX_CLOCK_GETTIME wrapped_clock_gettime
-#define ZMODEM_POSIX_SELECT wrapped_select
-#include "../zmdm_posix.c"
-#undef ZMODEM_POSIX_SELECT
-#undef ZMODEM_POSIX_CLOCK_GETTIME
-#undef ZMODEM_POSIX_CLOSE
-#undef ZMODEM_POSIX_WRITE
-#undef ZMODEM_POSIX_TCSETATTR
+#undef ZMODEM_PLAT_TCSETATTR
+#undef ZMODEM_PLAT_WRITE
+#undef ZMODEM_PLAT_CLOSE
+#undef ZMODEM_PLAT_CLOCK_GETTIME
+#define ZMODEM_PLAT_TCSETATTR(fd,action,attributes) \
+	wrapped_tcsetattr((fd),(action),(attributes))
+#define ZMODEM_PLAT_WRITE(fd,buffer,length) \
+	wrapped_write((fd),(buffer),(length))
+#define ZMODEM_PLAT_CLOSE(fd) wrapped_close((fd))
+#define ZMODEM_PLAT_CLOCK_GETTIME(clock_id,value) \
+	wrapped_clock_gettime((clock_id),(value))
+#define ZMODEM_PLAT_SELECT(nfds,readfds,writefds,errorfds,timeout) \
+	wrapped_select((nfds),(readfds),(writefds),(errorfds),(timeout))
+#include "../posix/zmodem_plat.c"
+#undef ZMODEM_PLAT_SELECT
+#undef ZMODEM_PLAT_CLOCK_GETTIME
+#undef ZMODEM_PLAT_CLOSE
+#undef ZMODEM_PLAT_WRITE
+#undef ZMODEM_PLAT_TCSETATTR
 
 static int tcsetattr_failures;
 static int tcsetattr_calls;
@@ -170,7 +178,7 @@ open_terminal(int * master_fd,int * slave_fd)
 static bool
 test_failed_raw_setup_is_restored(void)
 {
-	struct zmodem_posix_io io;
+	struct zmodem_plat_io io;
 	int master_fd;
 	int slave_fd;
 	bool passed = true;
@@ -178,14 +186,14 @@ test_failed_raw_setup_is_restored(void)
 	if (!open_terminal(&master_fd,&slave_fd)) {
 		return expect_cleanup(false,"open raw-setup terminal");
 	}
-	zmodem_posix_io_init(&io,slave_fd,slave_fd);
+	zmodem_plat_io_init(&io,slave_fd,slave_fd);
 	tcsetattr_calls = 0;
 	tcsetattr_failures = 1;
-	passed = expect_cleanup(zmodem_posix_io_make_raw(&io) != 0,
+	passed = expect_cleanup(zmodem_plat_io_make_raw(&io) != 0,
 	    "inject raw setup failure") && passed;
 	passed = expect_cleanup(io.termios_saved,
 	    "retain state after raw setup failure") && passed;
-	passed = expect_cleanup(zmodem_posix_io_restore(&io) == 0,
+	passed = expect_cleanup(zmodem_plat_io_restore(&io) == 0,
 	    "restore after raw setup failure") && passed;
 	passed = expect_cleanup(tcsetattr_calls == 2,
 	    "attempt raw setup and restoration") && passed;
@@ -201,7 +209,7 @@ test_failed_raw_setup_is_restored(void)
 static bool
 test_failed_restore_is_retryable(void)
 {
-	struct zmodem_posix_io io;
+	struct zmodem_plat_io io;
 	int master_fd;
 	int slave_fd;
 	bool passed = true;
@@ -209,16 +217,16 @@ test_failed_restore_is_retryable(void)
 	if (!open_terminal(&master_fd,&slave_fd)) {
 		return expect_cleanup(false,"open restore terminal");
 	}
-	zmodem_posix_io_init(&io,slave_fd,slave_fd);
+	zmodem_plat_io_init(&io,slave_fd,slave_fd);
 	tcsetattr_failures = 0;
-	passed = expect_cleanup(zmodem_posix_io_make_raw(&io) == 0,
+	passed = expect_cleanup(zmodem_plat_io_make_raw(&io) == 0,
 	    "configure restore terminal") && passed;
 	tcsetattr_failures = 1;
-	passed = expect_cleanup(zmodem_posix_io_restore(&io) != 0,
+	passed = expect_cleanup(zmodem_plat_io_restore(&io) != 0,
 	    "report restore failure") && passed;
 	passed = expect_cleanup(io.termios_saved,
 	    "retain state after restore failure") && passed;
-	passed = expect_cleanup(zmodem_posix_io_restore(&io) == 0,
+	passed = expect_cleanup(zmodem_plat_io_restore(&io) == 0,
 	    "retry terminal restoration") && passed;
 	passed = expect_cleanup(!io.termios_saved,
 	    "clear state after restore retry") && passed;
@@ -232,12 +240,12 @@ test_failed_restore_is_retryable(void)
 static bool
 test_close_attempts_flush_and_close(void)
 {
-	struct zmodem_posix_io io;
+	struct zmodem_plat_io io;
 	int owned_fd;
 	bool passed = true;
 
-	zmodem_posix_io_init(&io,-1,-1);
-	if (zmodem_posix_io_open(&io,"/dev/null") != 0) {
+	zmodem_plat_io_init(&io,-1,-1);
+	if (zmodem_plat_io_open(&io,"/dev/null") != 0) {
 		return expect_cleanup(false,"open cleanup descriptor");
 	}
 	owned_fd = io.owned_fd;
@@ -249,7 +257,7 @@ test_close_attempts_flush_and_close(void)
 	failed_close_fd = owned_fd;
 	write_calls = 0;
 	close_calls = 0;
-	passed = expect_cleanup(zmodem_posix_io_close(&io) != 0,
+	passed = expect_cleanup(zmodem_plat_io_close(&io) != 0,
 	    "report flush and close failures") && passed;
 	passed = expect_cleanup(write_calls == 2,"attempt complete pending flush") &&
 	    passed;

@@ -32,23 +32,20 @@
  * and original author of zmtx/zmrx.
  */
 
+#include "plat.h"
+
 #include <ctype.h>
 #include <errno.h>
 #include <stdio.h>
-#include <fcntl.h>
-#include <sys/types.h>
-#include <sys/stat.h>
 #include <inttypes.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
-#include <utime.h>
-#include <unistd.h>
 #include "version.h"
 
 #include "zmodem.h"
 #include "zmdm.h"
-#include "zmdm_posix.h"
+#include "zmodem_plat.h"
 
 #define MAX_RETRIES 10
 #define EXIT_TRANSFER_FAILED 4
@@ -62,7 +59,7 @@ enum receive_result {
 };
 
 static struct zmodem protocol;
-static struct zmodem_posix_io posix_io;
+static struct zmodem_plat_io plat_io;
 
 static FILE * fp = NULL;				/* fp of file being received or NULL */
 static time_t mdate;					/* file date of file being received */
@@ -70,7 +67,6 @@ static bool mdate_known;
 static char filename[0x80];				/* filename of file being received */
 static char * name;					/* pointer to the part of the filename used in the actual open */
 
-static char * line = NULL;				/* device to use for io */
 static bool opt_v = false;				/* show progress output */
 static bool opt_d = false;				/* show debug output */
 static bool opt_q = false;
@@ -83,7 +79,7 @@ static uint8_t attention_sequence[ZATTNLEN];
 
 static uintmax_t current_file_size;
 static bool current_file_size_known;
-static struct timespec transfer_start;
+static ZMODEM_PLAT_TIMESPEC transfer_start;
 static bool transfer_clock_started;
 static bool receive_error_reported;
 
@@ -119,13 +115,13 @@ report_receiver_file(const char * operation,const char * name)
 static uintmax_t
 elapsed_seconds(void)
 {
-	struct timespec now;
+	ZMODEM_PLAT_TIMESPEC now;
 	time_t seconds;
 
 	if (!transfer_clock_started) {
 		return UINTMAX_C(1);
 	}
-	if (clock_gettime(CLOCK_MONOTONIC,&now) != 0) {
+	if (ZMODEM_PLAT_CLOCK_GETTIME(ZMODEM_PLAT_CLOCK_MONOTONIC,&now) != 0) {
 		return UINTMAX_C(1);
 	}
 	seconds = now.tv_sec - transfer_start.tv_sec;
@@ -153,9 +149,9 @@ show_progress(char * name,FILE * fp)
 	int percentage;
 	uintmax_t duration;
 	intmax_t cps;
-	off_t position;
+	ZMODEM_PLAT_OFF_T position;
 
-	position = ftello(fp);
+	position = ZMODEM_PLAT_FTELLO(fp);
 
 	percentage = 100;
 	if (current_file_size_known) {
@@ -180,12 +176,12 @@ static bool
 file_position(FILE * file,uint32_t * position)
 
 {
-	off_t offset;
+	ZMODEM_PLAT_OFF_T offset;
 
 	if (file == NULL) {
 		return false;
 	}
-	offset = ftello(file);
+	offset = ZMODEM_PLAT_FTELLO(file);
 	if (offset < 0) {
 		return false;
 	}
@@ -335,7 +331,7 @@ receive_file_data(char * name,FILE * fp)
 				return ZFERR;
 			}
 			if (fwrite(rx_data_subpacket,1,n,fp) != n) {
-				int error = errno != 0 ? errno : EIO;
+				int error = errno != 0 ? errno : ZMODEM_PLAT_ERROR_IO;
 
 				(void)tx_pos_header(&protocol,ZFERR,pos);
 				report_receiver_errno("can't write file",name,error);
@@ -485,7 +481,7 @@ receive_file(void)
 {
 	uint32_t position;
 	uintmax_t parsed_size;
-	struct stat s;
+	ZMODEM_PLAT_STAT_T s;
 	FILE * received_file;
 	int received_fd = -1;
 	int type;
@@ -497,7 +493,7 @@ receive_file(void)
 	bool exists = false;
 	bool create_exclusively = false;
 	uint8_t management;
-	struct utimbuf tv;
+	ZMODEM_PLAT_UTIMBUF tv;
 	const char * mode = "wb";
 	char * file_info = (char *)rx_data_subpacket;
 	char * metadata;
@@ -666,11 +662,11 @@ receive_file(void)
 	 * decide whether to transfer the file or skip it
 	 */
 
-	if (stat(name,&s) == 0) {
+	if (ZMODEM_PLAT_STAT_FILE(name,&s) == 0) {
 		exists = true;
 	}
 	else {
-		if (errno != ENOENT) {
+		if (errno != ZMODEM_PLAT_ERROR_NOT_FOUND) {
 			int error = errno;
 
 			(void)tx_pos_header(&protocol,ZFERR,UINT32_C(0));
@@ -756,13 +752,13 @@ receive_file(void)
 	 */
 
 	if (create_exclusively) {
-		received_fd = open(name,O_WRONLY | O_CREAT | O_EXCL,(mode_t)0666);
+		received_fd = ZMODEM_PLAT_OPEN(name,ZMODEM_PLAT_OPEN_WRITE_ONLY | ZMODEM_PLAT_OPEN_CREATE | ZMODEM_PLAT_OPEN_EXCLUSIVE,(ZMODEM_PLAT_MODE_T)0666);
 		if (received_fd >= 0) {
-			received_file = fdopen(received_fd,mode);
+			received_file = ZMODEM_PLAT_FDOPEN(received_fd,mode);
 			if (received_file == NULL) {
 				int fdopen_error = errno;
 
-				(void)close(received_fd);
+				(void)ZMODEM_PLAT_CLOSE(received_fd);
 				errno = fdopen_error;
 			}
 		}
@@ -784,7 +780,7 @@ receive_file(void)
 	}
 
 	transfer_clock_started =
-	    clock_gettime(CLOCK_MONOTONIC,&transfer_start) == 0;
+	    ZMODEM_PLAT_CLOCK_GETTIME(ZMODEM_PLAT_CLOCK_MONOTONIC,&transfer_start) == 0;
 	type = receive_file_data(filename,received_file);
 	if (type != ZEOF) {
 		if (type != ZFERR) {
@@ -838,7 +834,7 @@ receive_file(void)
 		tv.actime = mdate;
 		tv.modtime = mdate;
 
-		(void)utime(name, &tv);
+		(void)ZMODEM_PLAT_UTIME(name, &tv);
 	}
 
 	/*
@@ -856,7 +852,7 @@ static int
 cleanup(int status)
 
 {
-	struct utimbuf tv;
+	ZMODEM_PLAT_UTIMBUF tv;
 
 	if (fp) {
 		(void)fflush(fp);
@@ -869,11 +865,11 @@ cleanup(int status)
 			tv.actime = mdate;
 			tv.modtime = mdate;
 
-			(void)utime(name, &tv);
+			(void)ZMODEM_PLAT_UTIME(name, &tv);
 		}
 	}
 
-	if (zmodem_posix_io_close(&posix_io) != 0) {
+	if (zmodem_plat_io_close(&plat_io) != 0) {
 		(void)fprintf(stderr,"zmrx: transfer line cleanup failed\n");
 		if (status == 0) {
 			status = EXIT_CLEANUP_FAILED;
@@ -889,7 +885,6 @@ usage(void)
 {
 	(void)printf("zmrx %s Copyright (c) 1994 Stephen Hurd\n",VERSION);
 	(void)printf("usage : zmrx options\n");
-	(void)printf("	-lline      line to use for io\n");
 	(void)printf("	-j    	    junk pathnames\n");
 	(void)printf("	-n          transfer if source is newer\n");
 	(void)printf("	-o          overwrite if exists\n");
@@ -902,6 +897,7 @@ usage(void)
 	(void)printf("	-e          request control-character escaping\n");
 	(void)printf("	-b          request high-bit-byte escaping\n");
 	(void)printf("	(only one of -n -c or -p may be specified)\n");
+	zmodem_plat_usage(ZMODEM_PLAT_ZMRX);
 
 	exit(cleanup(1));
 }
@@ -913,27 +909,35 @@ main(int argc,char ** argv)
 	bool transfer_failed = false;
 	int i;
 	int type;
+	size_t argument_index = 1U;
+	size_t first_operand;
 	struct zmodem_io io;
 
-	if (zmodem_posix_ignore_sigpipe() != 0) {
-		(void)fprintf(stderr,"zmrx: can't configure broken-pipe handling\n");
-		return 2;
-	}
-	zmodem_posix_io_init(&posix_io,STDIN_FILENO,STDOUT_FILENO);
-	zmodem_posix_io_bind(&io,&posix_io);
+	zmodem_plat_io_init(&plat_io,ZMODEM_PLAT_STDIN,ZMODEM_PLAT_STDOUT);
+	zmodem_plat_io_bind(&io,&plat_io);
 	if (zmodem_init(&protocol,&io) != ZMODEM_OK) {
 		(void)fprintf(stderr,"zmrx: can't initialize protocol state\n");
 		return 2;
 	}
 
-	argv++;
-	while (--argc > 0 && ((*argv)[0] == '-')) {
-		const char * argument = argv[0];
+	while ((argument_index < (size_t)argc) &&
+	    (argv[argument_index][0] == '-')) {
+		const char * argument = argv[argument_index];
 		size_t option_index;
 
 		for (option_index = 1U; argument[option_index] != '\0';
 		    option_index++) {
+			enum zmodem_plat_option_result platform_result;
 			int option = toupper((unsigned char)argument[option_index]);
+
+			platform_result = zmodem_plat_parse_option(&plat_io,
+			    ZMODEM_PLAT_ZMRX,argument,&option_index);
+			if (platform_result == ZMODEM_PLAT_OPTION_INVALID) {
+				usage();
+			}
+			if (platform_result == ZMODEM_PLAT_OPTION_ACCEPTED) {
+				continue;
+			}
 
 			switch (option) {
 				case 'B':
@@ -966,18 +970,15 @@ main(int argc,char ** argv)
 				case 'J':
 					junk_pathnames = true;
 					break;
-				case 'L':
-					line = (char *)&argument[option_index + 1U];
-					option_index = strlen(argument) - 1U;
-					break;
 				default:
 					(void)printf("zmrx: bad option %c\n",
 					    argument[option_index]);
 					usage();
 			}
 		}
-		argv++;
+		argument_index += 1U;
 	}
+	first_operand = argument_index;
 
 	if (opt_d) {
 		opt_v = true;
@@ -990,24 +991,15 @@ main(int argc,char ** argv)
 
 	if (((unsigned)protocol.management_newer +
 	    (unsigned)protocol.management_clobber +
-	    (unsigned)protocol.management_protect) > 1U || argc != 0) {
+	    (unsigned)protocol.management_protect) > 1U ||
+	    first_operand != (size_t)argc) {
 		usage();
 	}
 
-	if (line != NULL) {
-		if (zmodem_posix_io_open(&posix_io,line) != 0) {
-			(void)fprintf(stderr,"zmrx can't open line for input/output %s\n",line);
-			exit(2);
-		}
-	}
-
-	/*
-	 * set the io device to transparent
-	 */
-
-	if (zmodem_posix_io_make_raw(&posix_io) != 0) {
-		(void)fprintf(stderr,"zmrx: can't configure transfer line\n");
-		return cleanup(2);
+	i = zmodem_plat_post_parse(&plat_io,ZMODEM_PLAT_ZMRX,argc,argv,
+	    first_operand);
+	if (i != 0) {
+		return cleanup(i);
 	}
 
 	/*

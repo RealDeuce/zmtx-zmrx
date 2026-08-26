@@ -1,7 +1,10 @@
 CFLAGS += -std=c99
 REDUCED_MEMORY ?= 0
-CPPFLAGS += -D_POSIX_C_SOURCE=200112L -D_FILE_OFFSET_BITS=64 \
-	-DREDUCED_MEMORY=$(REDUCED_MEMORY)
+ZMODEM_PLATFORM ?= posix
+PLATFORM_PRELUDE = $(ZMODEM_PLATFORM)/plat.h
+PLATFORM_HEADER = $(ZMODEM_PLATFORM)/zmodem_plat.h
+PLATFORM_SOURCE = $(ZMODEM_PLATFORM)/zmodem_plat.c
+CPPFLAGS += -I$(ZMODEM_PLATFORM) -I. -DREDUCED_MEMORY=$(REDUCED_MEMORY)
 
 prefix ?= /usr/local
 PREFIX ?= $(prefix)
@@ -56,52 +59,59 @@ coverage:
 quality: check check-install check-static check-sanitize check-fuzz \
 	check-reduced coverage
 
-tests/test_crc: tests/test_crc.c crctab.o crctab.h
+tests/test_crc: tests/test_crc.c crctab.o crctab.h $(PLATFORM_PRELUDE)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -I. \
 	    tests/test_crc.c crctab.o $(LDFLAGS) $(LDLIBS) $(LIBS) \
 	    -o tests/test_crc
 
-tests/test_zmdm: tests/test_zmdm.c zmdm.o crctab.o zmdm.h zmodem.h crctab.h
+tests/test_zmdm: tests/test_zmdm.c zmdm.o crctab.o zmdm.h zmodem.h crctab.h \
+	    $(PLATFORM_PRELUDE)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -I. \
 	    tests/test_zmdm.c zmdm.o crctab.o $(LDFLAGS) $(LDLIBS) $(LIBS) \
 	    -o tests/test_zmdm
 
-tests/test_zmtx: tests/test_zmtx.c zmtx.c version.h zmdm.o zmdm_posix.o \
-	    crctab.o zmdm.h zmdm_posix.h zmodem.h crctab.h
+tests/test_zmtx: tests/test_zmtx.c zmtx.c version.h zmdm.o plat.o \
+	    crctab.o zmdm.h $(PLATFORM_HEADER) $(PLATFORM_PRELUDE) zmodem.h \
+	    crctab.h
 	$(CC) $(CPPFLAGS) $(CFLAGS) -I. \
-	    tests/test_zmtx.c zmdm.o zmdm_posix.o crctab.o \
+	    tests/test_zmtx.c zmdm.o plat.o crctab.o \
 	    $(LDFLAGS) $(LDLIBS) $(LIBS) -o tests/test_zmtx
 
-tests/test_zmrx: tests/test_zmrx.c zmrx.c version.h zmdm.o zmdm_posix.o \
-	    crctab.o zmdm.h zmdm_posix.h zmodem.h crctab.h
+tests/test_zmrx: tests/test_zmrx.c zmrx.c version.h zmdm.o plat.o \
+	    crctab.o zmdm.h $(PLATFORM_HEADER) $(PLATFORM_PRELUDE) zmodem.h \
+	    crctab.h
 	$(CC) $(CPPFLAGS) $(CFLAGS) -I. \
-	    tests/test_zmrx.c zmdm.o zmdm_posix.o crctab.o \
+	    tests/test_zmrx.c zmdm.o plat.o crctab.o \
 	    $(LDFLAGS) $(LDLIBS) $(LIBS) -o tests/test_zmrx
 
-tests/test_posix_io: tests/test_posix_io.c zmdm_posix.o zmdm_posix.h zmdm.h
+tests/test_posix_io: tests/test_posix_io.c plat.o $(PLATFORM_HEADER) \
+	    $(PLATFORM_PRELUDE) zmdm.h
 	$(CC) $(CPPFLAGS) $(CFLAGS) -I. \
-	    tests/test_posix_io.c zmdm_posix.o $(LDFLAGS) $(LDLIBS) $(LIBS) \
+	    tests/test_posix_io.c plat.o $(LDFLAGS) $(LDLIBS) $(LIBS) \
 	    -o tests/test_posix_io
 
-tests/test_posix_cleanup: tests/test_posix_cleanup.c zmdm_posix.c \
-	    zmdm_posix.h zmdm.h
+tests/test_posix_cleanup: tests/test_posix_cleanup.c $(PLATFORM_SOURCE) \
+	    $(PLATFORM_HEADER) $(PLATFORM_PRELUDE) zmdm.h
 	$(CC) $(CPPFLAGS) $(CFLAGS) -I. tests/test_posix_cleanup.c \
 	    $(LDFLAGS) $(LDLIBS) $(LIBS) -o tests/test_posix_cleanup
 
-zmtx:	zmtx.o zmdm.o zmdm_posix.o crctab.o
-	$(CC) $(LDFLAGS) zmtx.o zmdm.o zmdm_posix.o crctab.o \
+zmtx:	zmtx.o zmdm.o plat.o crctab.o
+	$(CC) $(LDFLAGS) zmtx.o zmdm.o plat.o crctab.o \
 	    $(LDLIBS) $(LIBS) -o zmtx
 
-zmrx:	zmrx.o zmdm.o zmdm_posix.o crctab.o
-	$(CC) $(LDFLAGS) zmrx.o zmdm.o zmdm_posix.o crctab.o \
+zmrx:	zmrx.o zmdm.o plat.o crctab.o
+	$(CC) $(LDFLAGS) zmrx.o zmdm.o plat.o crctab.o \
 	    $(LDLIBS) $(LIBS) -o zmrx
 
-zmtx.o:	zmtx.c version.h zmodem.h zmdm.h zmdm_posix.h
-zmrx.o:	zmrx.c version.h zmodem.h zmdm.h zmdm_posix.h
+zmtx.o:	zmtx.c version.h zmodem.h zmdm.h $(PLATFORM_HEADER) \
+	    $(PLATFORM_PRELUDE)
+zmrx.o:	zmrx.c version.h zmodem.h zmdm.h $(PLATFORM_HEADER) \
+	    $(PLATFORM_PRELUDE)
 
-zmdm.o:		zmdm.c zmodem.h zmdm.h crctab.h
-zmdm_posix.o:	zmdm_posix.c zmdm_posix.h zmdm.h
-crctab.o:	crctab.c crctab.h crctab_slicing.h
+zmdm.o:		zmdm.c zmodem.h zmdm.h crctab.h $(PLATFORM_PRELUDE)
+plat.o:	$(PLATFORM_SOURCE) $(PLATFORM_HEADER) $(PLATFORM_PRELUDE) zmdm.h
+	$(CC) $(CPPFLAGS) $(CFLAGS) -c $(PLATFORM_SOURCE) -o $@
+crctab.o:	crctab.c crctab.h crctab_slicing.h $(PLATFORM_PRELUDE)
 
 .c.o:
 	$(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@

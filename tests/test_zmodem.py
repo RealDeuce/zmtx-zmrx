@@ -1470,6 +1470,17 @@ class ZmodemTests(unittest.TestCase):
                     )
                     self.assertEqual(result.returncode, returncode)
 
+    def test_usage_appends_platform_options(self):
+        for program in (ZMTX, ZMRX):
+            with self.subTest(program=program.name):
+                result = subprocess.run(
+                    [str(program), "-x"], stdin=subprocess.DEVNULL,
+                    stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                    timeout=10,
+                )
+                self.assertEqual(result.returncode, 1)
+                self.assertIn(b"\t-lline", result.stdout)
+
     @unittest.skipUnless(REDUCED_MEMORY,
                          "reduced-build command line only")
     def test_reduced_sender_omits_zedzap_options(self):

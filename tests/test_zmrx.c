@@ -1,4 +1,4 @@
-#define _XOPEN_SOURCE 600
+#include "plat.h"
 
 #define main zmrx_application_main
 #include "../zmrx.c"
@@ -34,8 +34,8 @@ test_cleanup_failure(void)
 		(void)close(descriptors[1]);
 		return expect_receiver(false,"redirect cleanup diagnostic");
 	}
-	zmodem_posix_io_init(&posix_io,-1,-1);
-	posix_io.output_count = 1U;
+	zmodem_plat_io_init(&plat_io,-1,-1);
+	plat_io.output_count = 1U;
 	passed = expect_receiver(cleanup(0) == EXIT_CLEANUP_FAILED,
 	    "cleanup failure changes successful status") && passed;
 	passed = expect_receiver(cleanup(EXIT_TRANSFER_FAILED) ==
