@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="description" content="zmtx/zmrx: a compact, portable ZMODEM sender and receiver.">
+  <meta name="description" content="zmtx/zmrx: compact, POSIX-first ZMODEM tools with a portable C99 core and a CP/M 2.2 port.">
   <title>zmtx/zmrx — ZMODEM tools</title>
   <link rel="stylesheet" href="style.css">
 </head>
@@ -13,17 +13,20 @@
       <a class="wordmark" href="#top" aria-label="zmtx/zmrx home">zmtx<span>/</span>zmrx</a>
       <div class="nav-links">
         <a href="#about">About</a>
+        <a href="#platforms">Platforms</a>
         <a href="#history">History</a>
         <a href="https://github.com/RealDeuce/zmtx-zmrx">Source</a>
       </div>
     </nav>
 
     <div class="hero-copy" id="top">
-      <p class="eyebrow">ZMODEM for POSIX systems</p>
+      <p class="eyebrow">POSIX-first ZMODEM</p>
       <h1>Small tools.<br><span>Solid transfers.</span></h1>
       <p class="lede">
         <strong>zmtx</strong> and <strong>zmrx</strong> are compact command-line
         programs for sending and receiving files with the ZMODEM protocol.
+        POSIX is the only first-class platform; a defined platform boundary
+        also makes focused ports to smaller systems possible.
       </p>
       <div class="actions">
         <a class="button primary" href="https://github.com/RealDeuce/zmtx-zmrx/releases/latest">Get the latest release</a>
@@ -37,7 +40,10 @@
 <span>$</span> zmrx
 
 <b># ZedZap and bounded windows</b>
-<span>$</span> zmtx -8 -w32K disk.img</code></pre>
+<span>$</span> zmtx -8 -w32K disk.img
+
+<b># Cross-compile the CP/M 2.2 port</b>
+<span>$</span> make cpm</code></pre>
     </div>
   </header>
 
@@ -51,7 +57,7 @@
         <article>
           <span class="feature-number">01</span>
           <h3>Portable</h3>
-          <p>Strict C99 and POSIX.1-2001 source, tested with modern GCC and Clang on Linux, macOS and FreeBSD.</p>
+          <p>A strict C99 core with a documented platform boundary. POSIX remains the sole first-class target.</p>
         </article>
         <article>
           <span class="feature-number">02</span>
@@ -68,6 +74,40 @@
         The source is available under the
         <a href="https://github.com/RealDeuce/zmtx-zmrx/blob/main/LICENSE">2-clause BSD license</a>.
         Historical third-party notices remain intact.
+      </p>
+    </section>
+
+    <section class="platforms" id="platforms">
+      <div class="section-heading">
+        <p class="eyebrow">Where it runs</p>
+        <h2>POSIX first.<br>Portable by design.</h2>
+      </div>
+      <div class="platform-grid">
+        <article>
+          <p class="platform-status">First-class platform</p>
+          <h3>POSIX</h3>
+          <p>
+            Linux, macOS and FreeBSD receive the full performance path,
+            native files and clocks, terminal handling, automated tests, and
+            release-level support.
+          </p>
+        </article>
+        <article>
+          <p class="platform-status">Bundled secondary port</p>
+          <h3>CP/M 2.2</h3>
+          <p>
+            Z88DK builds reduced-memory <code>zmtx.com</code> and
+            <code>zmrx.com</code> programs with a replaceable modem driver and
+            generic blocking <code>RDR:</code>/<code>PUN:</code> support.
+          </p>
+        </article>
+      </div>
+      <p class="portability-note">
+        Additional systems can implement the
+        <a href="https://github.com/RealDeuce/zmtx-zmrx/blob/main/PORTING.md">documented platform contract</a>
+        without changing the protocol core. These ports are intentionally
+        second-class: they adapt the POSIX-shaped interface to their local
+        compiler, files, clock, and transport facilities.
       </p>
     </section>
 

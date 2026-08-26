@@ -255,6 +255,70 @@ h3 {
   margin: 2.5rem 0 0;
 }
 
+.platforms {
+  color: #f7f5ee;
+  background: var(--green);
+}
+
+.platforms .eyebrow {
+  color: #f5a27e;
+}
+
+.platform-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  border-top: 1px solid rgba(255, 255, 255, 0.25);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.25);
+}
+
+.platform-grid article {
+  padding: 2.5rem clamp(1rem, 4vw, 3.5rem) 2.8rem;
+  border-right: 1px solid rgba(255, 255, 255, 0.25);
+}
+
+.platform-grid article:first-child {
+  padding-left: 0;
+}
+
+.platform-grid article:last-child {
+  border-right: 0;
+}
+
+.platform-grid h3 {
+  margin-top: 0.7rem;
+  font-size: clamp(1.8rem, 3vw, 2.8rem);
+}
+
+.platform-grid article > p:last-child,
+.portability-note {
+  color: #d6e4de;
+}
+
+.platform-status {
+  margin: 0;
+  color: #fff;
+  font: 700 0.72rem/1.2 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.platform-grid code {
+  color: #fff;
+}
+
+.portability-note {
+  max-width: 850px;
+  margin: 2.5rem 0 0;
+}
+
+.portability-note a {
+  color: #fff;
+}
+
+.portability-note a:hover {
+  color: #ffd4c2;
+}
+
 .history {
   background: var(--paper-light);
 }
@@ -347,6 +411,21 @@ footer p {
   }
 
   .feature-grid article:last-child {
+    border-bottom: 0;
+  }
+
+  .platform-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .platform-grid article,
+  .platform-grid article:first-child {
+    padding-left: 0;
+    border-right: 0;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.25);
+  }
+
+  .platform-grid article:last-child {
     border-bottom: 0;
   }
 }
