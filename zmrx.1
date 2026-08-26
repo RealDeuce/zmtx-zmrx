@@ -17,14 +17,19 @@ reads
 .I stdin
 and writes
 .IR stdout.
-It accepts standard 1 KiB data subpackets and the 4 KiB and 8 KiB
-subpackets commonly called ZedZap.
+Normal builds accept standard 1 KiB data subpackets and the 4 KiB and 8 KiB
+subpackets commonly called ZedZap.  Builds compiled with
+.B REDUCED_MEMORY
+accept standard 1 KiB subpackets only; this does not limit file size.
 .SH OPTIONS
 .TP
 .B \-s
 Request non-streaming operation.  The receiver clears its overlapped I/O
-capability and advertises an 8 KiB receive buffer, causing a conforming sender
-to wait for an acknowledgement after every data subpacket.
+capability and advertises its configured maximum receive buffer (8 KiB
+normally or 1 KiB with
+.BR REDUCED_MEMORY ),
+causing a conforming sender to wait for an acknowledgement after every data
+subpacket.
 .TP
 .B \-e
 Request that the sender escape all control characters.

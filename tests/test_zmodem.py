@@ -17,6 +17,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 ZMTX = Path(os.environ.get("ZMTX", ROOT / "zmtx"))
 ZMRX = Path(os.environ.get("ZMRX", ROOT / "zmrx"))
+REDUCED_MEMORY = os.environ.get("ZMODEM_REDUCED_MEMORY") == "1"
+MAX_SUBPACKET = 1024 if REDUCED_MEMORY else 8192
 
 ZPAD = 0x2A
 ZDLE = 0x18
@@ -389,6 +391,8 @@ class ZmodemTests(unittest.TestCase):
                     process.kill()
                     process.wait()
 
+    @unittest.skipIf(REDUCED_MEMORY,
+                     "the reduced-memory profile omits ZedZap")
     def test_receiver_accepts_zedzap_subpacket(self):
         with tempfile.TemporaryDirectory() as temporary:
             process, peer = self.start_receiver(temporary)
@@ -411,6 +415,8 @@ class ZmodemTests(unittest.TestCase):
                     process.kill()
                     process.wait()
 
+    @unittest.skipIf(REDUCED_MEMORY,
+                     "the reduced-memory profile omits ZedZap")
     def test_sender_adapts_toward_zedzap_maximum(self):
         with tempfile.TemporaryDirectory() as temporary:
             payload = bytes(index & 0xFF for index in range(20000))
@@ -474,8 +480,9 @@ class ZmodemTests(unittest.TestCase):
                     source.write_bytes(payload)
                     flags = 3 | (0x40 if escape_control else 0) | \
                         (0x80 if escape_8th else 0)
+                    options = () if REDUCED_MEMORY else ("-8",)
                     process, peer, zrinit = self.start_sender(
-                        temporary, source.name, "-8", flags=flags)
+                        temporary, source.name, *options, flags=flags)
                     try:
                         frame_type, position, _ = peer.header()
                         self.assertEqual((frame_type, position), (ZDATA, 0))
@@ -544,7 +551,8 @@ class ZmodemTests(unittest.TestCase):
             try:
                 frame_type, _, header = peer.header()
                 self.assertEqual(frame_type, ZRINIT)
-                self.assertEqual(int.from_bytes(header[1:3], "little"), 8192)
+                self.assertEqual(int.from_bytes(header[1:3], "little"),
+                                 MAX_SUBPACKET)
                 self.assertEqual(header[4] & 0x02, 0)
                 returncode, stderr = finish_receiver(peer, process)
                 self.assertEqual(returncode, 0, stderr.decode(errors="replace"))
@@ -1188,14 +1196,21 @@ class ZmodemTests(unittest.TestCase):
             payload = bytes(index & 0xFF for index in range(4000))
             source = Path(temporary) / "bounded.bin"
             source.write_bytes(payload)
+            options = () if REDUCED_MEMORY else ("-4",)
             process, peer, zrinit = self.start_sender(
-                temporary, source.name, "-4", buffer_size=1500)
+                temporary, source.name, *options, buffer_size=1500)
             try:
                 offset = 0
-                expected = (
-                    (1024, ZCRCG), (476, ZCRCW),
-                    (1500, ZCRCW), (1000, ZCRCE),
-                )
+                if REDUCED_MEMORY:
+                    expected = (
+                        (1024, ZCRCG), (476, ZCRCW),
+                        (1024, ZCRCG), (476, ZCRCW), (1000, ZCRCE),
+                    )
+                else:
+                    expected = (
+                        (1024, ZCRCG), (476, ZCRCW),
+                        (1500, ZCRCW), (1000, ZCRCE),
+                    )
                 for expected_length, expected_end in expected:
                     if offset in (0, 1500, 3000):
                         frame_type, position, _ = peer.header()
@@ -1454,6 +1469,20 @@ class ZmodemTests(unittest.TestCase):
                         stderr=subprocess.PIPE, timeout=10,
                     )
                     self.assertEqual(result.returncode, returncode)
+
+    @unittest.skipUnless(REDUCED_MEMORY,
+                         "reduced-build command line only")
+    def test_reduced_sender_omits_zedzap_options(self):
+        for option in ("-4", "-8"):
+            with self.subTest(option=option):
+                result = subprocess.run(
+                    [str(ZMTX), option], stdin=subprocess.DEVNULL,
+                    stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                    timeout=10,
+                )
+                self.assertEqual(result.returncode, 1)
+                self.assertNotIn(b"\t-4", result.stdout)
+                self.assertNotIn(b"\t-8", result.stdout)
 
     def test_programs_report_initial_output_failure(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -1839,7 +1868,7 @@ class ZmodemTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             process, peer = self.start_receiver(temporary)
             try:
-                info = b"a" * 8193
+                info = b"a" * (MAX_SUBPACKET + 1)
                 peer.send(binary32_header(ZFILE) +
                           data_subpacket32(info, ZCRCW))
                 frame_type, position, _ = peer.header()
@@ -1857,7 +1886,7 @@ class ZmodemTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             process, peer = self.start_receiver(temporary)
             try:
-                info = b"a" * 8193
+                info = b"a" * (MAX_SUBPACKET + 1)
                 peer.send(hex_header(ZFILE) + data_subpacket(info, ZCRCW))
                 frame_type, position, _ = peer.header()
                 self.assertEqual((frame_type, position), (ZNAK, 0))
@@ -1961,6 +1990,8 @@ class ZmodemTests(unittest.TestCase):
                     process.kill()
                     process.wait()
 
+    @unittest.skipIf(REDUCED_MEMORY,
+                     "requires a write larger than the host stdio buffer")
     def test_receiver_reports_immediate_write_failure(self):
         with tempfile.TemporaryDirectory() as temporary:
             target = Path(temporary) / "immediate-write-failure"
@@ -1970,7 +2001,8 @@ class ZmodemTests(unittest.TestCase):
             process, peer = self.start_receiver(
                 temporary, preexec_fn=reject_file_growth)
             try:
-                payload = bytes(index & 0xFF for index in range(8192))
+                payload = bytes(index & 0xFF
+                                for index in range(MAX_SUBPACKET))
                 block_count = 64
                 metadata = (f"{FILE_WRITE_LIMIT + block_count * len(payload)} "
                             "1750 0 0 1 0\0").encode()
@@ -2291,6 +2323,8 @@ class ZmodemTests(unittest.TestCase):
                     process.kill()
                     process.wait()
 
+    @unittest.skipIf(REDUCED_MEMORY,
+                     "the reduced-memory profile omits ZedZap")
     def test_nonstreaming_sender_honors_reposition(self):
         with tempfile.TemporaryDirectory() as temporary:
             payload = bytes(index & 0xFF for index in range(20000))

@@ -21,6 +21,26 @@ make
 make check
 ```
 
+Memory-constrained targets can select a standard-ZMODEM profile:
+
+```sh
+make clean
+make REDUCED_MEMORY=1
+make REDUCED_MEMORY=1 check
+```
+
+This profile limits data subpackets to 1 KiB and uses the existing bytewise
+CRC-32 implementation instead of the slicing-by-8 tables. Large files are
+still supported; they are transferred as additional 1 KiB subpackets. The
+smaller limit also reduces the protocol input, encoded-output, sender, and
+receiver buffers. It omits the non-standard `zmtx -4` and `zmtx -8` options,
+and `zmrx` rejects oversized ZedZap subpackets after consuming them.
+
+`REDUCED_MEMORY` changes public structure sizes, so every translation unit
+that includes the protocol headers must be built consistently. Run
+`make clean` when switching profiles. Defining `REDUCED_MEMORY` directly for
+a non-make build has the same effect.
+
 Optional end-to-end link tests exercise corruption recovery, asymmetric
 bandwidth, and interoperability with `lrzsz` when either `lsz`/`lrz` or
 `sz`/`rz` are installed:
@@ -64,7 +84,8 @@ The default sender uses standard ZMODEM data subpackets of at most 1 KiB.
 extensions. The sender starts at 1 KiB and grows toward the selected maximum
 while the transfer remains error-free. Because ZedZap has no wire-level
 negotiation, these options should be used only with compatible receivers.
-`zmrx` accepts all three sizes automatically.
+Normal `zmrx` builds accept all three sizes automatically. Reduced-memory
+builds use standard 1 KiB subpackets exclusively.
 
 `zmtx -s` waits for a committed-position acknowledgement after every data
 subpacket. `zmrx -s` requests the same behavior from a conforming sender.

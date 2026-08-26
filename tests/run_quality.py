@@ -222,6 +222,13 @@ def sanitizers(directory):
     run_tests(directory, environment)
 
 
+def reduced_memory(directory):
+    build_instrumented(directory, ["-O2", "-DREDUCED_MEMORY"])
+    environment = os.environ.copy()
+    environment["ZMODEM_REDUCED_MEMORY"] = "1"
+    run_tests(directory, environment)
+
+
 def fuzz(directory):
     # Current Apple toolchains omit libclang_rt.fuzzer_osx.a.
     clang, _, _ = llvm_toolchain()
@@ -300,10 +307,10 @@ def coverage(directory):
 
 def main():
     if len(sys.argv) != 2 or sys.argv[1] not in {
-        "static", "sanitize", "fuzz", "coverage"
+        "static", "sanitize", "fuzz", "reduced", "coverage"
     }:
         raise SystemExit(
-            "usage: run_quality.py {static|sanitize|fuzz|coverage}"
+            "usage: run_quality.py {static|sanitize|fuzz|reduced|coverage}"
         )
     with tempfile.TemporaryDirectory(prefix="zmtx-quality-") as temporary:
         directory = Path(temporary)
@@ -314,6 +321,8 @@ def main():
             sanitizers(directory)
         elif action == "fuzz":
             fuzz(directory)
+        elif action == "reduced":
+            reduced_memory(directory)
         else:
             coverage(directory)
 

@@ -924,8 +924,10 @@ usage(void)
 	(void)printf("zmtx %s Copyright (c) 1994 Stephen Hurd\n",VERSION);
 	(void)printf("usage : zmtx options files\n");
 	(void)printf("	-lline      line to use for io\n");
+#if !REDUCED_MEMORY
 	(void)printf("	-4          use ZedZap 4 KiB data subpackets\n");
 	(void)printf("	-8          use ZedZap 8 KiB data subpackets\n");
+#endif
 	(void)printf("	-s          wait for an acknowledgement after each block\n");
 	(void)printf("	-wbytes     limit unacknowledged data (K and M suffixes allowed)\n");
 	(void)printf("	-n          transfer if source is newer\n");
@@ -968,12 +970,14 @@ main(int argc,char ** argv)
 			int option = toupper((unsigned char)argument[option_index]);
 
 			switch (option) {
+#if !REDUCED_MEMORY
 				case '4':
 					max_subpacket_size = 4096U;
 					break;
 				case '8':
 					max_subpacket_size = ZMAXSPLEN;
 					break;
+#endif
 				case 'D':
 					opt_d = true;
 					break;

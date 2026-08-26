@@ -28,6 +28,15 @@ standard 1 KiB subpacket and increases the size after clean transfers.
 .B \-8
 Use ZedZap data subpackets up to 8 KiB.  This extension is not negotiated;
 use it only with a receiver known to accept ZedZap subpackets.
+.PP
+Builds compiled with
+.B REDUCED_MEMORY
+omit the
+.B \-4
+and
+.B \-8
+options and use standard 1 KiB data subpackets.  This does not limit file
+size; large files use additional subpackets.
 .TP
 .B \-s
 Disable streaming and wait for a committed-position acknowledgement after

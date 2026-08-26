@@ -115,7 +115,9 @@ const uint32_t crc32tab[] = { /* CRC polynomial 0xedb88320 */
  * from the existing reflected IEEE CRC-32 table keeps the relationship
  * explicit and avoids importing another implementation or table source.
  */
+#if !REDUCED_MEMORY
 #include "crctab_slicing.h"
+#endif
 
 uint16_t
 crc16_update(uint16_t crc,uint8_t byte)
@@ -148,6 +150,7 @@ uint32_t
 crc32_update(uint32_t crc,const uint8_t * data,size_t length)
 
 {
+#if !REDUCED_MEMORY
 	while (length >= 8) {
 		crc ^= (uint32_t)data[0] |
 		    ((uint32_t)data[1] << 8) |
@@ -164,6 +167,7 @@ crc32_update(uint32_t crc,const uint8_t * data,size_t length)
 		data += 8;
 		length -= 8;
 	}
+#endif
 	while (length-- > 0) {
 		crc = crc32_byte_update(crc,*data);
 		data += 1U;

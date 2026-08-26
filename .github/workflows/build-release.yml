@@ -65,6 +65,9 @@ jobs:
       - name: Fuzz smoke test
         run: make check-fuzz
 
+      - name: Reduced-memory profile
+        run: make check-reduced
+
       - name: Structural coverage
         run: make coverage
 

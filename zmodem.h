@@ -61,7 +61,11 @@
 
 #define ZMAXHLEN    UINT8_C(0x10)   /* maximum header information length */
 #define ZBLOCKLEN   UINT16_C(0x0400) /* standard maximum subpacket length */
+#if REDUCED_MEMORY
+#define ZMAXSPLEN   ZBLOCKLEN        /* reduced profile: standard ZMODEM */
+#else
 #define ZMAXSPLEN   UINT16_C(0x2000) /* ZedZap maximum subpacket length */
+#endif
 
 
 #define	ZPAD		UINT8_C(0x2a)	/* pad character; begins frames */

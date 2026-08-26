@@ -1,5 +1,7 @@
 CFLAGS += -std=c99
-CPPFLAGS += -D_POSIX_C_SOURCE=200112L -D_FILE_OFFSET_BITS=64
+REDUCED_MEMORY ?= 0
+CPPFLAGS += -D_POSIX_C_SOURCE=200112L -D_FILE_OFFSET_BITS=64 \
+	-DREDUCED_MEMORY=$(REDUCED_MEMORY)
 
 prefix ?= /usr/local
 PREFIX ?= $(prefix)
@@ -45,10 +47,14 @@ check-sanitize:
 check-fuzz:
 	$(PYTHON) tests/run_quality.py fuzz
 
+check-reduced:
+	$(PYTHON) tests/run_quality.py reduced
+
 coverage:
 	$(PYTHON) tests/run_quality.py coverage
 
-quality: check check-install check-static check-sanitize check-fuzz coverage
+quality: check check-install check-static check-sanitize check-fuzz \
+	check-reduced coverage
 
 tests/test_crc: tests/test_crc.c crctab.o crctab.h
 	$(CC) $(CPPFLAGS) $(CFLAGS) -I. \
@@ -118,4 +124,5 @@ clean:
 	    tests/test_zmrx tests/test_posix_io tests/test_posix_cleanup
 
 .PHONY: all check check-install check-link check-static check-sanitize \
-	check-fuzz coverage quality install install-strip uninstall clean
+	check-fuzz check-reduced coverage quality install install-strip uninstall \
+	clean

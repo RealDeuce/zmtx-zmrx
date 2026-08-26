@@ -411,6 +411,52 @@ test_span_scanner_round_trip(void)
 }
 
 static bool
+test_maximum_escaped_data_round_trip(bool use_crc32)
+{
+	static const uint8_t escaped_bytes[] = {
+		ZDLE,UINT8_C(0x10),UINT8_C(0x90),XON,UINT8_C(0x91),
+		XOFF,UINT8_C(0x93)
+	};
+	static struct zmodem sender;
+	static struct zmodem receiver;
+	static struct fake_io sending_io;
+	static struct fake_io receiving_io;
+	static uint8_t payload[ZMAXSPLEN];
+	static uint8_t received[ZMAXSPLEN];
+	uint8_t frame_end;
+	size_t index;
+	size_t length;
+	bool passed;
+
+	for (index = 0U; index < sizeof(payload); index++) {
+		payload[index] = escaped_bytes[index % sizeof(escaped_bytes)];
+	}
+	initialize(&sender,&sending_io);
+	sender.can_fcs_32 = use_crc32;
+	sender.want_fcs_32 = use_crc32;
+	passed = expect(tx_data(&sender,ZCRCE,payload,sizeof(payload)) == 0,
+	    "transmit maximum escaped packet");
+	passed = expect(sending_io.output_length >= 2U * sizeof(payload),
+	    "maximum packet escape-heavy wire length") && passed;
+
+	initialize(&receiver,&receiving_io);
+	receiver.receive_32_bit_data = use_crc32;
+	(void)memcpy(receiving_io.input,sending_io.output,
+	    sending_io.output_length);
+	receiving_io.input_length = sending_io.output_length;
+	passed = expect(rx_data(&receiver,received,sizeof(received),&length,
+	    &frame_end) == ENDOFFRAME,
+	    "receive maximum escaped packet") && passed;
+	passed = expect(length == sizeof(payload),
+	    "maximum escaped packet length") && passed;
+	passed = expect(frame_end == ZCRCE,
+	    "maximum escaped packet terminator") && passed;
+	passed = expect(memcmp(received,payload,sizeof(payload)) == 0,
+	    "maximum escaped packet payload") && passed;
+	return passed;
+}
+
+static bool
 test_eighth_bit_escaping(void)
 
 {
@@ -634,6 +680,8 @@ test_data_packets(void)
 	bool passed = true;
 
 	passed = test_span_scanner_round_trip() && passed;
+	passed = test_maximum_escaped_data_round_trip(false) && passed;
+	passed = test_maximum_escaped_data_round_trip(true) && passed;
 	passed = data_round_trip(false,false,ZCRCW,ENDOFFRAME) && passed;
 	passed = data_round_trip(false,true,ZCRCW,ENDOFFRAME) && passed;
 	passed = data_round_trip(true,false,ZCRCW,ENDOFFRAME) && passed;
