@@ -376,6 +376,8 @@ data_round_trip(bool use_crc32,bool escape_controls,uint8_t sent_frame_end,
 static bool
 test_control_character_escaping(void)
 {
+	static const uint8_t leading_plain[] = { 'A' };
+	static const uint8_t leading_cr[] = { CR };
 	static const uint8_t payload[] = {
 		'A',CR,'A',UINT8_C(0x8d),'@',CR,UINT8_C(0xc0),UINT8_C(0x8d)
 	};
@@ -397,6 +399,24 @@ test_control_character_escaping(void)
 	struct zmodem protocol;
 	struct fake_io fake;
 	bool passed = true;
+
+	initialize(&protocol,&fake);
+	passed = expect(tx_raw(&protocol,'@') == 0,
+	    "transmit context before leading plain byte") && passed;
+	passed = expect(tx_data(&protocol,ZCRCE,leading_plain,
+	    sizeof(leading_plain)) == 0,
+	    "transmit leading plain byte after at sign") && passed;
+	passed = expect(fake.output[1] == 'A',
+	    "leave leading plain byte unescaped after at sign") && passed;
+	initialize(&protocol,&fake);
+	passed = expect(tx_raw(&protocol,'@') == 0,
+	    "transmit context before leading CR") && passed;
+	passed = expect(tx_data(&protocol,ZCRCE,leading_cr,sizeof(leading_cr)) == 0,
+	    "transmit leading CR after at sign") && passed;
+	passed = expect(fake.output[1] == ZDLE,
+	    "prefix leading CR after at sign with ZDLE") && passed;
+	passed = expect(fake.output[2] == 'M',
+	    "encode leading CR after at sign") && passed;
 
 	initialize(&protocol,&fake);
 	passed = expect(tx_data(&protocol,ZCRCE,payload,sizeof(payload)) == 0,
@@ -638,14 +658,14 @@ static bool
 test_iac_escaping(void)
 
 {
-	static const uint8_t payload[] = { 1U,UINT8_C(0xff),2U };
+	static const uint8_t payload[] = { 1U,UINT8_C(0xff),ZDLE };
 	struct zmodem sender;
 	struct zmodem receiver;
 	struct fake_io sending_io;
 	struct fake_io receiving_io;
 	uint8_t received[sizeof(payload)];
 	uint8_t frame_end;
-	uint8_t header[HDRLEN] = { ZDATA,UINT8_C(0xff),0U,0U,0U };
+	uint8_t header[HDRLEN] = { ZDATA,UINT8_C(0xff),ZDLE,0U,0U };
 	size_t length;
 	bool passed;
 
@@ -659,9 +679,10 @@ test_iac_escaping(void)
 	sender.escape_iac = true;
 	passed = expect(tx_data(&sender,ZCRCE,payload,sizeof(payload)) == 0,
 	    "transmit data with IAC escaping") && passed;
-	passed = expect(sending_io.output[1] == ZDLE &&
-	    sending_io.output[2] == ZRUB1,
-	    "encode IAC as ZDLE ZRUB1") && passed;
+	passed = expect(sending_io.output[1] == ZDLE,
+	    "prefix escaped IAC with ZDLE") && passed;
+	passed = expect(sending_io.output[2] == ZRUB1,
+	    "encode escaped IAC as ZRUB1") && passed;
 
 	initialize(&receiver,&receiving_io);
 	(void)memcpy(receiving_io.input,sending_io.output,
@@ -669,8 +690,9 @@ test_iac_escaping(void)
 	receiving_io.input_length = sending_io.output_length;
 	passed = expect(rx_data(&receiver,received,sizeof(received),&length,
 	    &frame_end) == ENDOFFRAME,"receive IAC-escaped packet") && passed;
-	passed = expect(length == sizeof(payload) &&
-	    memcmp(received,payload,sizeof(payload)) == 0,
+	passed = expect(length == sizeof(payload),
+	    "IAC-escaped packet length") && passed;
+	passed = expect(memcmp(received,payload,sizeof(payload)) == 0,
 	    "IAC-escaped packet payload") && passed;
 
 	initialize(&sender,&sending_io);

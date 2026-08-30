@@ -315,17 +315,20 @@ test_frontend_hooks(void)
 	    "consume platform line option") && passed;
 	passed = expect(strcmp(plat_io.line,"/dev/null") == 0,
 	    "retain platform line value") && passed;
-	passed = expect(strcmp(option,"-l/dev/null") == 0 &&
-	    strcmp(operand,"payload.bin") == 0,
-	    "leave argument strings unchanged") && passed;
+	passed = expect(strcmp(option,"-l/dev/null") == 0,
+	    "leave option string unchanged") && passed;
+	passed = expect(strcmp(operand,"payload.bin") == 0,
+	    "leave operand string unchanged") && passed;
 	option_index = 1U;
 	passed = expect(zmodem_plat_parse_option(&plat_io,ZMODEM_PLAT_ZMTX,
 	    "-d",&option_index) == ZMODEM_PLAT_OPTION_NOT_HANDLED,
 	    "leave generic option for application") && passed;
 	passed = expect(zmodem_plat_post_parse(&plat_io,ZMODEM_PLAT_ZMTX,3,
 	    arguments,2U) == 0,"configure platform after parsing") && passed;
-	passed = expect(arguments[1] == option && arguments[2] == operand,
-	    "leave argument vector unchanged") && passed;
+	passed = expect(arguments[1] == option,
+	    "leave option vector entry unchanged") && passed;
+	passed = expect(arguments[2] == operand,
+	    "leave operand vector entry unchanged") && passed;
 	passed = expect(zmodem_plat_io_close(&plat_io) == 0,
 	    "close frontend platform state") && passed;
 	return passed;

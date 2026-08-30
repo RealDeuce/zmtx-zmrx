@@ -434,7 +434,7 @@ tx_copy_plain_span(const uint8_t * classes,uint8_t * output,
 	const span_word highs = SPAN_WORD_HIGHS;
 	size_t span = 0U;
 
-	if ((length > 0U) && *previous == '@' &&
+	if (*previous == '@' &&
 	    (((unsigned)classes[data[0]] & TX_ESCAPE_CR) != 0U)) {
 		return 0U;
 	}
