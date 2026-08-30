@@ -101,6 +101,7 @@ struct zmodem {
 	uint8_t tx_classes[256];
 	bool tx_classes_initialized;
 	uint8_t tx_data_wire[ZMODEM_TX_DATA_WIRE_CAPACITY];
+	bool receive_escaped_control_characters;
 };
 
 /*

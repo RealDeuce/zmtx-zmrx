@@ -167,6 +167,8 @@ class LinkTests(unittest.TestCase):
         content = bytes(range(256)) * 256
         cases = (
             ("zmtx-to-lrz.bin", (ZMTX, "-8"), (LRZ, "-q", "-y")),
+            ("zmtx-to-lrz-escctl.bin", (ZMTX, "-8"),
+             (LRZ, "-q", "-y", "-e")),
             ("lsz-to-zmrx.bin", (LSZ, "-q", "-8"),
              (ZMRX, "-q", "-o")),
         )

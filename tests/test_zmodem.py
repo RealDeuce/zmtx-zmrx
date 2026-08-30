@@ -122,6 +122,7 @@ class Peer:
         self.sock.settimeout(10)
         self.buffer = bytearray()
         self.use_crc32 = False
+        self.require_escaped_controls = False
 
     def send(self, data):
         self.sock.sendall(data)
@@ -177,10 +178,18 @@ class Peer:
 
     def _data_byte(self, *, require_escaped_8th=False):
         value = self.byte()
+        if self.require_escaped_controls and value != ZDLE and \
+                value not in (XON, 0x91, 0x13, 0x93) and \
+                value & 0x60 == 0:
+            raise AssertionError(f"unescaped control byte {value:#x}")
         if require_escaped_8th and value & 0x80:
             raise AssertionError(f"unescaped eighth-bit byte {value:#x}")
         while value in (XON, 0x91, 0x13, 0x93):
             value = self.byte()
+            if self.require_escaped_controls and value != ZDLE and \
+                    value not in (XON, 0x91, 0x13, 0x93) and \
+                    value & 0x60 == 0:
+                raise AssertionError(f"unescaped control byte {value:#x}")
             if require_escaped_8th and value & 0x80:
                 raise AssertionError(
                     f"unescaped eighth-bit byte {value:#x}")
@@ -203,6 +212,10 @@ class Peer:
         payload = bytearray()
         while True:
             value = self.byte()
+            if self.require_escaped_controls and value != ZDLE and \
+                    value not in (XON, 0x91, 0x13, 0x93) and \
+                    value & 0x60 == 0:
+                raise AssertionError(f"unescaped control byte {value:#x}")
             if require_escaped_8th and value & 0x80:
                 raise AssertionError(f"unescaped eighth-bit byte {value:#x}")
             if value in (XON, 0x91, 0x13, 0x93):
@@ -327,6 +340,7 @@ class ZmodemTests(unittest.TestCase):
         zrinit = bytes((ZRINIT, buffer_size & 0xFF,
                         (buffer_size >> 8) & 0xFF, zf1, flags))
         peer.send(hex_header(ZRINIT, header=zrinit))
+        peer.require_escaped_controls = bool(flags & ZF0_ESCCTL)
         frame_type, _, _ = peer.header()
         self.assertEqual(frame_type, ZFILE)
         peer.data(require_escaped_8th=bool(flags & ZF0_ESC8))

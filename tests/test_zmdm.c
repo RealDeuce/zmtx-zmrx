@@ -352,6 +352,7 @@ data_round_trip(bool use_crc32,bool escape_controls,uint8_t sent_frame_end,
 
 		initialize(&receiver,&receiving_io);
 		receiver.receive_32_bit_data = use_crc32;
+		receiver.receive_escaped_control_characters = escape_controls;
 		if (prefix > sending_io.output_length) {
 			prefix = sending_io.output_length;
 		}
@@ -369,6 +370,129 @@ data_round_trip(bool use_crc32,bool escape_controls,uint8_t sent_frame_end,
 		passed = expect(memcmp(received,payload,sizeof(payload)) == 0,
 		    "data packet payload") && passed;
 	}
+	return passed;
+}
+
+static bool
+test_control_character_escaping(void)
+{
+	static const uint8_t payload[] = {
+		'A',CR,'A',UINT8_C(0x8d),'@',CR,UINT8_C(0xc0),UINT8_C(0x8d)
+	};
+	static const uint8_t expected_normal[] = {
+		'A',CR,'A',UINT8_C(0x8d),'@',ZDLE,'M',UINT8_C(0xc0),
+		ZDLE,UINT8_C(0xcd)
+	};
+	static const uint8_t expected_escctl[] = {
+		'A',ZDLE,'M','A',ZDLE,UINT8_C(0xcd),'@',ZDLE,'M',
+		UINT8_C(0xc0),ZDLE,UINT8_C(0xcd)
+	};
+	static const uint8_t boundary_payload[] = {
+		'A','A','A','@',CR,'A','A',UINT8_C(0xc0),UINT8_C(0x8d),'A'
+	};
+	static const uint8_t expected_boundary[] = {
+		'A','A','A','@',ZDLE,'M','A','A',UINT8_C(0xc0),ZDLE,
+		UINT8_C(0xcd),'A'
+	};
+	struct zmodem protocol;
+	struct fake_io fake;
+	bool passed = true;
+
+	initialize(&protocol,&fake);
+	passed = expect(tx_data(&protocol,ZCRCE,payload,sizeof(payload)) == 0,
+	    "transmit normal conditional CR escapes") && passed;
+	passed = expect(fake.output_length >= sizeof(expected_normal),
+	    "normal conditional CR wire length") && passed;
+	passed = expect(memcmp(fake.output,expected_normal,
+	    sizeof(expected_normal)) == 0,"normal conditional CR wire bytes") &&
+	    passed;
+	initialize(&protocol,&fake);
+	passed = expect(tx_data(&protocol,ZCRCE,boundary_payload,
+	    sizeof(boundary_payload)) == 0,"transmit word-boundary CR escapes") &&
+	    passed;
+	passed = expect(fake.output_length >= sizeof(expected_boundary),
+	    "word-boundary CR wire length") && passed;
+	passed = expect(memcmp(fake.output,expected_boundary,
+	    sizeof(expected_boundary)) == 0,"word-boundary CR wire bytes") &&
+	    passed;
+
+	initialize(&protocol,&fake);
+	protocol.escape_all_control_characters = true;
+	passed = expect(tx_data(&protocol,ZCRCE,payload,sizeof(payload)) == 0,
+	    "transmit ESCCTL CR escapes") && passed;
+	passed = expect(fake.output_length >= sizeof(expected_escctl),
+	    "ESCCTL CR wire length") && passed;
+	passed = expect(memcmp(fake.output,expected_escctl,
+	    sizeof(expected_escctl)) == 0,"ESCCTL CR wire bytes") && passed;
+	return passed;
+}
+
+static bool
+test_receive_control_enforcement(void)
+{
+	static const uint8_t payload[] = { 'A',CR,'B' };
+	static const uint8_t clean_payload[] = { 'A','B' };
+	struct zmodem sender;
+	struct zmodem receiver;
+	struct fake_io sending_io;
+	struct fake_io receiving_io;
+	uint8_t received[sizeof(payload)];
+	uint8_t frame_end;
+	size_t length;
+	bool passed = true;
+
+	initialize(&sender,&sending_io);
+	passed = expect(tx_data(&sender,ZCRCE,payload,sizeof(payload)) == 0,
+	    "transmit raw control packet") && passed;
+	initialize(&receiver,&receiving_io);
+	receiver.receive_escaped_control_characters = true;
+	(void)memcpy(receiving_io.input,sending_io.output,
+	    sending_io.output_length);
+	receiving_io.input_length = sending_io.output_length;
+	passed = expect(rx_data(&receiver,received,sizeof(received),&length,
+	    &frame_end) == INVDATA,"reject under-escaped control packet") &&
+	    passed;
+
+	initialize(&sender,&sending_io);
+	sender.escape_all_control_characters = true;
+	passed = expect(tx_data(&sender,ZCRCE,clean_payload,
+	    sizeof(clean_payload)) == 0,"transmit clean control packet") && passed;
+	initialize(&receiver,&receiving_io);
+	receiver.receive_escaped_control_characters = true;
+	receiving_io.input[0] = sending_io.output[0];
+	receiving_io.input[1] = CR;
+	(void)memcpy(&receiving_io.input[2],&sending_io.output[1],
+	    sending_io.output_length - 1U);
+	receiving_io.input_length = sending_io.output_length + 1U;
+	passed = expect(rx_data(&receiver,received,sizeof(received),&length,
+	    &frame_end) == ENDOFFRAME,"ignore spurious raw control") && passed;
+	passed = expect(length == sizeof(clean_payload),
+	    "spurious control packet length") && passed;
+	passed = expect(memcmp(received,clean_payload,sizeof(clean_payload)) == 0,
+	    "spurious control packet payload") && passed;
+	return passed;
+}
+
+static bool
+test_escctl_hex_header_terminator(void)
+{
+	struct zmodem sender;
+	struct zmodem receiver;
+	struct fake_io sending_io;
+	struct fake_io receiving_io;
+	uint8_t header[HDRLEN] = { ZRQINIT,0U,0U,0U,0U };
+	bool passed;
+
+	initialize(&sender,&sending_io);
+	passed = expect(tx_hex_header(&sender,header) == 0,
+	    "transmit ESCCTL hex header");
+	initialize(&receiver,&receiving_io);
+	receiver.receive_escaped_control_characters = true;
+	(void)memcpy(receiving_io.input,sending_io.output,
+	    sending_io.output_length);
+	receiving_io.input_length = sending_io.output_length;
+	passed = expect(rx_header_and_check(&receiver,1000) == ZRQINIT,
+	    "preserve ESCCTL hex header terminator") && passed;
 	return passed;
 }
 
@@ -733,6 +857,9 @@ test_data_packets(void)
 	bool passed = true;
 
 	passed = test_span_scanner_round_trip() && passed;
+	passed = test_control_character_escaping() && passed;
+	passed = test_receive_control_enforcement() && passed;
+	passed = test_escctl_hex_header_terminator() && passed;
 	passed = test_maximum_escaped_data_round_trip(false) && passed;
 	passed = test_maximum_escaped_data_round_trip(true) && passed;
 	passed = data_round_trip(false,false,ZCRCW,ENDOFFRAME) && passed;

@@ -152,7 +152,7 @@ initialize_tx_classes(struct zmodem * zmodem)
 			action = TX_ESCAPE_ALWAYS;
 		}
 		else if (c == CR || c == 0x8d) {
-			action = TX_ESCAPE_CR;
+			action = TX_ESCAPE_CONTROL | TX_ESCAPE_CR;
 		}
 		else if ((c & 0x60) == 0) {
 			action = TX_ESCAPE_CONTROL;
@@ -180,7 +180,7 @@ active_tx_classes(struct zmodem * zmodem)
 	}
 	return TX_ESCAPE_ALWAYS |
 	    (zmodem->escape_all_control_characters ?
-	    TX_ESCAPE_CONTROL | TX_ESCAPE_CR : 0U) |
+	    TX_ESCAPE_CONTROL : 0U) |
 	    (zmodem->escape_8th_bit ? TX_ESCAPE_8TH : 0U) |
 	    (zmodem->escape_iac ? TX_ESCAPE_IAC : 0U);
 }
@@ -190,10 +190,11 @@ tx_byte_needs_escape(const struct zmodem * zmodem,uint8_t c,int previous,
     unsigned active)
 
 {
-	unsigned action = (unsigned)zmodem->tx_classes[c] & active;
+	unsigned classes = zmodem->tx_classes[c];
+	unsigned action = classes & active;
 
-	if (action == TX_ESCAPE_CR) {
-		return previous == '@';
+	if (((classes & TX_ESCAPE_CR) != 0U) && previous == '@') {
+		return true;
 	}
 	return action != TX_NORMAL;
 }
@@ -406,7 +407,9 @@ typedef uint64_t span_word;
 #define SPAN_WORD_HIGHS UINT64_C(0x8080808080808080)
 #define SPAN_WORD_ZDLE UINT64_C(0x1818181818181818)
 #define SPAN_WORD_CONTROL_MASK UINT64_C(0x7f7f7f7f7f7f7f7f)
-#define SPAN_WORD_CONTROL UINT64_C(0x1010101010101010)
+#define SPAN_WORD_SPECIAL_MASK UINT64_C(0x7474747474747474)
+#define SPAN_WORD_SPECIAL UINT64_C(0x1010101010101010)
+#define SPAN_WORD_AT UINT64_C(0x4040404040404040)
 #define SPAN_WORD_FLOW_MASK UINT64_C(0x7d7d7d7d7d7d7d7d)
 #define SPAN_WORD_FLOW UINT64_C(0x1111111111111111)
 #else
@@ -415,43 +418,54 @@ typedef uint32_t span_word;
 #define SPAN_WORD_HIGHS UINT32_C(0x80808080)
 #define SPAN_WORD_ZDLE UINT32_C(0x18181818)
 #define SPAN_WORD_CONTROL_MASK UINT32_C(0x7f7f7f7f)
-#define SPAN_WORD_CONTROL UINT32_C(0x10101010)
+#define SPAN_WORD_SPECIAL_MASK UINT32_C(0x74747474)
+#define SPAN_WORD_SPECIAL UINT32_C(0x10101010)
+#define SPAN_WORD_AT UINT32_C(0x40404040)
 #define SPAN_WORD_FLOW_MASK UINT32_C(0x7d7d7d7d)
 #define SPAN_WORD_FLOW UINT32_C(0x11111111)
 #endif
 
 static inline size_t
 tx_copy_plain_span(const uint8_t * classes,uint8_t * output,
-    const uint8_t * data,size_t length)
+    const uint8_t * data,size_t length,int * previous)
 
 {
 	const span_word ones = SPAN_WORD_ONES;
 	const span_word highs = SPAN_WORD_HIGHS;
 	size_t span = 0U;
 
+	if ((length > 0U) && *previous == '@' &&
+	    (((unsigned)classes[data[0]] & TX_ESCAPE_CR) != 0U)) {
+		return 0U;
+	}
 	while (length - span >= sizeof(span_word)) {
 		span_word word;
-		span_word zdle;
-		span_word control;
-		span_word flow;
+		span_word masked;
+		span_word special;
+		span_word at;
 
-		/* Find mandatory escapes while copying a plain word at once. */
+		/* Find mandatory or conditional escapes in a plain word. */
 		(void)memcpy(&word,&data[span],sizeof(word));
-		zdle = word ^ SPAN_WORD_ZDLE;
-		/* 0x10/0x90 share seven bits; flow controls vary in bits 1 and 7. */
-		control = (word & SPAN_WORD_CONTROL_MASK) ^ SPAN_WORD_CONTROL;
-		flow = (word & SPAN_WORD_FLOW_MASK) ^ SPAN_WORD_FLOW;
-		if ((((zdle - ones) & ~zdle & highs) |
-		    ((control - ones) & ~control & highs) |
-		    ((flow - ones) & ~flow & highs)) != 0U) {
+		masked = word & SPAN_WORD_CONTROL_MASK;
+		/* One predicate covers the mandatory controls and a few extras. */
+		special = (word & SPAN_WORD_SPECIAL_MASK) ^ SPAN_WORD_SPECIAL;
+		at = masked ^ SPAN_WORD_AT;
+		if ((((special - ones) & ~special & highs) |
+		    ((at - ones) & ~at & highs)) != 0U) {
 			break;
 		}
 		(void)memcpy(&output[span],&word,sizeof(word));
 		span += sizeof(word);
 	}
+	if (span > 0U) {
+		*previous = data[span - 1U] & 0x7f;
+	}
 	while ((span < length) &&
-	    (((unsigned)classes[data[span]] & TX_ESCAPE_ALWAYS) == 0U)) {
+	    (((unsigned)classes[data[span]] & TX_ESCAPE_ALWAYS) == 0U) &&
+	    ((((unsigned)classes[data[span]] & TX_ESCAPE_CR) == 0U) ||
+	    *previous != '@')) {
 		output[span] = data[span];
+		*previous = data[span] & 0x7f;
 		span += 1U;
 	}
 	return span;
@@ -473,15 +487,14 @@ tx_data(struct zmodem * restrict zmodem,uint8_t sub_frame_type,
 	if (active == TX_ESCAPE_ALWAYS) {
 		for (i=0;i<l;) {
 			size_t span = tx_copy_plain_span(zmodem->tx_classes,
-			    &zmodem->tx_data_wire[used],&p[i],l - i);
+			    &zmodem->tx_data_wire[used],&p[i],l - i,&previous);
 
 			i += span;
 			used += span;
 			if (i < l) {
-				zmodem->tx_data_wire[used] = ZDLE;
-				zmodem->tx_data_wire[used + 1U] =
-				    (uint8_t)(p[i] ^ 0x40);
-				used += 2U;
+				buffer_raw(zmodem,ZDLE,&used,&previous);
+				buffer_raw(zmodem,(uint8_t)(p[i] ^ 0x40),&used,
+				    &previous);
 				i += 1U;
 			}
 		}
@@ -696,9 +709,17 @@ rx_is_flow_control(int c)
 }
 
 static bool
-rx_needs_slow_path(int c)
+rx_is_unescaped_control(const struct zmodem * zmodem,int c)
 {
-	return (c == ZDLE) || rx_is_flow_control(c);
+	return zmodem->receive_escaped_control_characters && c != ZDLE &&
+	    (c & 0x60) == 0;
+}
+
+static bool
+rx_needs_slow_path(const struct zmodem * zmodem,int c)
+{
+	return (c == ZDLE) || rx_is_flow_control(c) ||
+	    rx_is_unescaped_control(zmodem,c);
 }
 
 /*
@@ -715,7 +736,8 @@ rx_cursor_slow(struct zmodem * restrict zmodem,int timeout_ms,int c,
     struct rx_cursor * restrict cursor)
 {
 	for (;;) {
-		while (rx_is_flow_control(c)) {
+		while (rx_is_flow_control(c) ||
+		    rx_is_unescaped_control(zmodem,c)) {
 			c = rx_cursor_raw(zmodem,timeout_ms,cursor);
 			if (c < 0) {
 				return c;
@@ -744,7 +766,7 @@ rx_cursor_slow(struct zmodem * restrict zmodem,int timeout_ms,int c,
 				return c ^ 0x40;
 			}
 
-			if (rx_needs_slow_path(c)) {
+			if (rx_needs_slow_path(zmodem,c)) {
 				continue;
 			}
 
@@ -806,7 +828,7 @@ rx_cursor(struct zmodem * restrict zmodem,int timeout_ms,
 	if (c < 0) {
 		return c;
 	}
-	if (!rx_needs_slow_path(c)) {
+	if (!rx_needs_slow_path(zmodem,c)) {
 		return c;
 	}
 	return rx_cursor_slow(zmodem,timeout_ms,c,cursor);
@@ -821,6 +843,14 @@ rx_plain_span(const struct zmodem * restrict zmodem,
 	const span_word ones = SPAN_WORD_ONES;
 	const span_word highs = SPAN_WORD_HIGHS;
 	size_t length = 0U;
+
+	if (zmodem->receive_escaped_control_characters) {
+		while ((length < cursor->input_count) &&
+		    !rx_needs_slow_path(zmodem,data[length])) {
+			length += 1U;
+		}
+		return length;
+	}
 
 	while (cursor->input_count - length >= sizeof(span_word)) {
 		span_word word;
@@ -839,7 +869,7 @@ rx_plain_span(const struct zmodem * restrict zmodem,
 		length += sizeof(word);
 	}
 	while ((length < cursor->input_count) &&
-	    !rx_needs_slow_path(data[length])) {
+	    !rx_needs_slow_path(zmodem,data[length])) {
 		length += 1U;
 	}
 	return length;
@@ -851,7 +881,7 @@ rx(struct zmodem * zmodem,int timeout_ms)
 {
 	int c = rx_raw(zmodem,timeout_ms);
 
-	if ((c >= 0) && rx_needs_slow_path(c)) {
+	if ((c >= 0) && rx_needs_slow_path(zmodem,c)) {
 		return rx_slow(zmodem,timeout_ms,c);
 	}
 	return c;
@@ -869,6 +899,20 @@ rx_byte(struct zmodem * zmodem,int timeout_ms,int invalid_result)
 	if (c > UINT8_MAX) {
 		return invalid_result;
 	}
+	return c;
+}
+
+static int
+rx_hex_terminator_byte(struct zmodem * zmodem,int timeout_ms)
+{
+	int c;
+
+	do {
+		c = rx_raw(zmodem,timeout_ms);
+		if (c < 0) {
+			return c;
+		}
+	} while (rx_is_flow_control(c));
 	return c;
 }
 
@@ -1326,7 +1370,7 @@ rx_hex_header(struct zmodem * zmodem,int timeout_ms)
 	/*
 	 * drop the end of line sequence after a hex header
 	 */
-	c = rx_byte(zmodem,timeout_ms,ZMODEM_INVALID_HEADER);
+	c = rx_hex_terminator_byte(zmodem,timeout_ms);
 	if (c < 0) {
 		return c;
 	}
@@ -1335,7 +1379,7 @@ rx_hex_header(struct zmodem * zmodem,int timeout_ms)
 		/*
 		 * both are expected with CR
 		 */
-		c = rx_byte(zmodem,timeout_ms,ZMODEM_INVALID_HEADER);
+		c = rx_hex_terminator_byte(zmodem,timeout_ms);
 		if (c < 0) {
 			return c;
 		}

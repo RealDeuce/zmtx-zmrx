@@ -396,6 +396,7 @@ tx_zrinit(void)
 	}
 	if (opt_escape_control) {
 		zrinit_header[ZF0] |= ZF0_ESCCTL;
+		protocol.receive_escaped_control_characters = true;
 	}
 	if (opt_escape_8th_bit) {
 		zrinit_header[ZF0] |= ZF0_ESC8;
