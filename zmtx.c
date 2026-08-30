@@ -226,12 +226,20 @@ static void
 select_zrpos_encoding(void)
 
 {
-	bool requested = protocol.rxd_header_len > ZMOBY_ZRPOS_FLAGS &&
-	    (protocol.rxd_header[ZMOBY_ZRPOS_FLAGS] & ZMOBY_REQUEST) != 0U;
+	uint8_t flags = protocol.rxd_header_len > ZMODEM90_ZRPOS_FLAGS ?
+	    protocol.rxd_header[ZMODEM90_ZRPOS_FLAGS] : 0U;
+	bool mobyturbo_requested =
+	    (flags & ZMODEM90_REQUEST_MOBYTURBO) != 0U;
+	bool pack7_requested = (flags & ZMODEM90_REQUEST_PACK7) != 0U;
 
-	protocol.use_mobyturbo = requested && !opt_M &&
+	protocol.use_pack7 = pack7_requested && protocol.escape_8th_bit;
+	protocol.use_mobyturbo = mobyturbo_requested && !opt_M &&
 	    !protocol.escape_8th_bit;
-	if (opt_d && requested) {
+	if (opt_d && pack7_requested) {
+		(void)fprintf(stderr,"zmtx: receiver %s Pack-7\n",
+		    protocol.use_pack7 ? "selected" : "requested unavailable");
+	}
+	if (opt_d && mobyturbo_requested) {
 		(void)fprintf(stderr,"zmtx: receiver %s MobyTurbo\n",
 		    protocol.use_mobyturbo ? "selected" : "requested unavailable");
 	}
@@ -814,6 +822,7 @@ send_file(const char * name)
 
 	type = TIMEOUT;
 	protocol.use_mobyturbo = false;
+	protocol.use_pack7 = false;
 	for (attempts=0;attempts<MAX_RETRIES;attempts++) {
 		bool stale_zrinit = false;
 

@@ -4,7 +4,7 @@ zmrx \- receive file using ZMODEM protocol
 .SH SYNOPSIS
 .B zmrx
 [
-.B \-sebmMjnopdvq
+.B \-7sebmMjnopdvq
 ] [
 .B \-l\fIline\fP
 ]
@@ -37,7 +37,14 @@ Request that the sender escape all control characters.
 .B \-b
 Request Omen ZMODEM-90 seven-bit-safe transport.  The sender uses the
 0x31 header format, RLE, CRC32, and SO/ZDLE eighth-bit quoting.  This is the
-default in the CP/M build.
+fallback format in the CP/M build.
+.TP
+.B \-7
+Request Omen ZMODEM-90 Pack-7 and imply
+.BR \-b .
+Pack-7 encodes four bytes as five printable seven-bit characters and uses the
+0x32 header format.  A sender which does not honor the request continues with
+0x31 framing.  Pack-7 is the CP/M default.
 .TP
 .B \-m
 Request Omen ZMODEM-90 MobyTurbo when the sender's active transparency probe

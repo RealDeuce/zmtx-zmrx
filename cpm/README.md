@@ -18,10 +18,11 @@ writes the `PUN:` device using BDOS calls. Its read is blocking, and its poll
 and purge operations are no-ops because CP/M 2.2 has no portable status or
 flush calls for these devices.
 
-The CP/M receiver requests Omen's ZMODEM-90 ESC8 mode by default, making
-receive transfers safe when the BIOS clears bit 7. The sender uses the same
-seven-bit-safe `0x31` header, RLE, and SO/ZDLE data encoding when the remote
-receiver requests ESC8. This is the portable path for the CP/M 2.2 BIOS
+The CP/M receiver requests Omen's ZMODEM-90 ESC8 and Pack-7 modes by default,
+making receive transfers safe when the BIOS clears bit 7. Pack-7 uses the
+`0x32` header and packs four bytes into five printable characters. A peer
+which does not honor its extended `ZRPOS` request continues with the `0x31`
+RLE and SO/ZDLE format. This is the portable path for the CP/M 2.2 BIOS
 contract, which defines `RDR:` and `PUN:` as ASCII devices. Eight-bit-clean
 machine-specific drivers remain useful for peers that do not implement ESC8.
 The recovered wire format and disassembly evidence are documented in
@@ -54,7 +55,7 @@ through a FIFO. Apply `tests/tnylpo-unbuffered-output.patch` to tnylpo before
 building the test executable. This changes only the emulator's raw character
 device buffering; it is not needed on real CP/M hardware. Raw tnylpo devices
 preserve all eight bits; the CP/M default still negotiates ESC8, so the live
-tests exercise the seven-bit-safe protocol path.
+tests exercise the seven-bit-safe Pack-7 protocol path.
 
 CP/M 2.2 records do not preserve an exact byte length for arbitrary files.
 Files whose length is not a multiple of 128 bytes may therefore be sent with

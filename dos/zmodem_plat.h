@@ -45,6 +45,7 @@ struct zmodem_dos_timespec {
 #define ZMODEM_PLAT_DEFAULT_NONSTREAMING false
 #define ZMODEM_PLAT_DEFAULT_JUNK_PATHNAMES true
 #define ZMODEM_PLAT_DEFAULT_ESCAPE_8TH_BIT false
+#define ZMODEM_PLAT_DEFAULT_PACK7 false
 
 int zmodem_dos_clock_gettime(int,struct zmodem_dos_timespec *);
 

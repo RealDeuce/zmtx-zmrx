@@ -19,11 +19,11 @@ ROUTINES = (
      "b55ce91e4b7e55f05acfc03493a8982234a9010f40c74ec32449feb2f542ddc9"),
     ("header-format dispatcher", 0x6FA8, 0x70DC,
      "7f704f1a484dba856e219bcc0d930bc958a99a748e762739fa9c4331e4d598b4"),
-    ("0x31 header encoder", 0x71D4, 0x72BA,
+    ("0x31/0x32 header encoder", 0x71D4, 0x72BA,
      "5340a84fbea30edaf419325bdce66815c32276b2a7e04e6fb0e4d7efdcae6c0d"),
     ("header receiver dispatcher", 0x7B8E, 0x7D5F,
      "07660d28c416364d761a21fe1697936dd725e6ad00719aaab0641bd53ae7f77e"),
-    ("0x31 header decoder", 0x807A, 0x81AA,
+    ("0x31/0x32 header decoder", 0x807A, 0x81AA,
      "614371867564405e0529ffdef5a89388ef7f9b51abfeb52c3db72aa33ac68d0c"),
     ("seven-bit decoder", 0x8642, 0x8778,
      "4e21178046c435ce04961f14b06227cae344be94d4d700846dd48fa726409921"),
@@ -40,13 +40,25 @@ MOBYTURBO_RANGES = (
     ("MobyTurbo -M option", 0x0A40, 0x0A50),
     ("MobyTurbo -m option", 0x0B28, 0x0B38),
     ("MobyTurbo offer and transparency probe", 0x5121, 0x5161),
-    ("MobyTurbo sender selection", 0x5450, 0x547F),
     ("MobyTurbo receiver request", 0x6696, 0x66CD),
     ("0x33 header encoder", 0x70DC, 0x71D4),
     ("MobyTurbo data encoder", 0x761B, 0x7647),
     ("MobyTurbo data receiver", 0x76D5, 0x7804),
     ("0x33 header receiver", 0x7CC2, 0x8056),
     ("MobyTurbo quoted-byte decoder", 0x850E, 0x8642),
+)
+
+PACK7_RANGES = (
+    ("Pack-7 -P option", 0x0A56, 0x0A5F,
+     "02e2bbf80453e065d91384f9b70483fec0fbac26199a4237f20051630ddfcf45"),
+    ("ZMODEM-90 sender mode selection", 0x5450, 0x547F,
+     "74c5ed53687ebe0c8ce652f1480468a8faeb3fa73c191bd054a9b0f4f778b8b5"),
+    ("Pack-7 receiver request", 0x6681, 0x6696,
+     "797ea70af95c6fe5c8bd094a816b37f44e38e5bcd2abd25abb3cc5903c5e4c77"),
+    ("Pack-7 data encoder", 0x72BA, 0x741E,
+     "163ecdebefe84e09eb7be723ae3382b9bb350ed40a2393fc4ecf4d02f1fb9671"),
+    ("Pack-7 data decoder", 0x81AA, 0x83A2,
+     "eb209f4c7cbb4cd20dd3a74d927537c55415e93fee0e1d6d3508e4a6470db4c3"),
 )
 
 
@@ -75,6 +87,10 @@ def main():
         actual = digest(image[start:end])
         if actual != expected:
             raise SystemExit(f"{name} at {start:04x}:{end:04x} changed")
+    for name, start, end, expected in PACK7_RANGES:
+        actual = digest(image[start:end])
+        if actual != expected:
+            raise SystemExit(f"{name} at {start:04x}:{end:04x} changed")
     suffix_start = DATA_SEGMENT + CRC_SUFFIX_OFFSET
     if image[suffix_start:suffix_start + len(CRC_SUFFIX)] != CRC_SUFFIX:
         raise SystemExit("Omen header CRC suffix was not found at DS:1bda")
@@ -85,6 +101,8 @@ def main():
     for name, start, end, _ in ROUTINES:
         print(f"CS:{start:04x}-{end - 1:04x}  {name}")
     for name, start, end in MOBYTURBO_RANGES:
+        print(f"CS:{start:04x}-{end - 1:04x}  {name}")
+    for name, start, end, _ in PACK7_RANGES:
         print(f"CS:{start:04x}-{end - 1:04x}  {name}")
 
     if args.disassemble:
@@ -97,6 +115,11 @@ def main():
                 [ndisasm, "-b", "16", f"-o{start:#x}", "-"],
                 input=image[start:end], check=True)
         for name, start, end in MOBYTURBO_RANGES:
+            print(f"\n;;; {name}, CS:{start:04x}-{end - 1:04x}")
+            subprocess.run(
+                [ndisasm, "-b", "16", f"-o{start:#x}", "-"],
+                input=image[start:end], check=True)
+        for name, start, end, _ in PACK7_RANGES:
             print(f"\n;;; {name}, CS:{start:04x}-{end - 1:04x}")
             subprocess.run(
                 [ndisasm, "-b", "16", f"-o{start:#x}", "-"],

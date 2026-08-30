@@ -1,12 +1,12 @@
-# Omen ESC8, RLE, and MobyTurbo disassembly evidence
+# Omen ESC8, Pack-7, RLE, and MobyTurbo disassembly evidence
 
 The public ZMODEM text names `ESC8`, `ZBINR32`, and `ZTRLE`, but does not
 fully specify Omen's seven-bit wire format. The implementation in this tree is
 therefore based on the 1997 Omen Technology `DSZ.EXE`, treated as normative,
 and not on behavioral guessing.
 
-The same executable defines the private MobyTurbo (`0x33`) transparent mode
-and its negotiation. No whole-frame format was inferred from black-box output.
+The same executable defines Pack-7 (`0x32`) and the private MobyTurbo (`0x33`)
+transparent mode. No whole-frame format was inferred from black-box output.
 
 The researched executable is the `DSZ.EXE` distributed in `dszexe.zip` at
 <https://www.bbsing.com/bbsprotocols/>. Neither archive nor executable is
@@ -19,14 +19,15 @@ redistributed here.
 
 Run `python3 tools/verify_dsz_esc8.py DSZ.EXE --disassemble` to verify the
 exact binary and reproduce the relevant 16-bit x86 disassembly. The verifier
-checks the complete executable, MZ load offset, the ESC8 routine ranges, and
-the CRC string independently before invoking `ndisasm`; its disassembly output
+checks the complete executable, MZ load offset, the ESC8 and Pack-7 routine
+ranges, and the CRC string independently before invoking `ndisasm`; its output
 also includes every MobyTurbo range cited below.
 
 After building the native programs, an optional two-direction DOSBox check is
 available as `python3 tools/test_dsz_esc8.py DSZ.EXE`. It verifies the binary,
-runs DSZ as both sender and receiver with `-E` and `-m`, and checks an all-byte
-and RLE-heavy payload. DSZ is deliberately absent from the repository and CI.
+runs DSZ as both sender and receiver with `-E`, `-EP`, and `-m`. The ESC8 and
+Pack-7 cases pass through a relay which actually clears bit 7. DSZ is
+deliberately absent from the repository and CI.
 
 ## Recovered format
 
@@ -37,12 +38,24 @@ image and therefore match the displayed `CS` offsets.
 | --- | --- |
 | `CS:6e12-6fa7` | Seven-bit encoder |
 | `CS:6fa8-70db` | Header-format dispatcher; mode 4 selects byte `0x31` |
-| `CS:71d4-72b9` | `0x31` header encoder |
+| `CS:71d4-72b9` | Shared `0x31`/`0x32` header encoder |
 | `CS:7b8e-7d5e` | Header receiver dispatch; byte `0x31` selects mode 4 |
-| `CS:807a-81a9` | `0x31` header and CRC decoder |
+| `CS:807a-81a9` | Shared `0x31`/`0x32` header and CRC decoder |
 | `CS:8642-8777` | Seven-bit quoted-byte decoder |
 | `CS:8a7e-8d31` | RLE, CRC32, and seven-bit data encoder |
 | `CS:8f9a-91f7` | Seven-bit, CRC32, and RLE data decoder |
+
+Pack-7 adds these authenticated paths:
+
+| Address | Function established by data flow and callers |
+| --- | --- |
+| `CS:0a56-0a5e` | `-P` enables Pack-7 preference |
+| `CS:5450-547e` | Extended `ZRPOS` bits select Pack-7, MobyTurbo, or RLE |
+| `CS:6681-6695` | Receiver requests Pack-7 with parameter-six bit `0x02` |
+| `CS:72ba-739b` | Pack-7 payload CRC32 and subpacket encoder |
+| `CS:739c-741d` | One-to-four-byte base-88 group encoder |
+| `CS:81aa-831d` | Pack-7 subpacket, terminator, and CRC32 decoder |
+| `CS:831e-83a1` | Base-88 group decoder |
 
 MobyTurbo is mode 3 in the same dispatcher. Its additional paths are:
 
@@ -86,6 +99,47 @@ bytes. `ZRESC` (`0x7e`) introduces RLE:
 
 Longer runs are divided at 63 bytes. The receiver routines perform the exact
 inverse and check CRC32 over tokens before accepting the expanded output.
+
+## Pack-7 wire format
+
+Mode 5 uses the same header layout, seven-bit quoting, copyright suffix, and
+little-endian salted CRC32 as mode 4, but sends indicator `0x32`. The header
+length byte is likewise `0x22 + parameter_count`.
+
+The encoder treats each group of one through four payload bytes as one
+big-endian unsigned integer. It repeatedly divides by 88, adds `0x22` to each
+remainder, and emits exactly one more digit than the input byte count in
+most-significant-first order. Thus every wire digit is in `0x22` through
+`0x79`; four input bytes always produce five digits. There is no RLE or SO
+quoting in Pack-7 data.
+
+After the final full or partial group, the sender emits `0x21` and then the
+raw subpacket terminator, without `ZDLE`. CRC32 covers the original decoded
+payload bytes followed by that terminator. The complemented CRC's four
+little-endian bytes are sent as one final five-digit Pack-7 group. `ZCRCW`
+retains its trailing `XON`.
+
+The receiver consumes five digits for every full group. A preceding group of
+two, three, or four digits followed by `0x21` yields one, two, or three final
+bytes; `0x21` by itself ends a group-aligned or empty packet. A terminator
+before `0x21`, a non-terminator byte after it, or a CRC group other than five
+digits is malformed.
+
+DSZ is permissive on corrupt input: its group routine counts up to five
+decoded symbols, accepts `0x20` through `0xac` around the nominal alphabet,
+and allows its 32-bit accumulator to wrap. The implementation in this tree
+intentionally accepts only canonical `0x22`-through-`0x79` digits, rejects
+one-digit partial groups and numeric overflow, and still matches DSZ for every
+valid frame.
+
+The authenticated disassembly establishes the group widths, accumulator order,
+raw `0x21` partial-group termination, CRC byte order, and extended-`ZRPOS` mode
+transition. For an optional live cross-check, `tools/test_dsz_esc8.py` accepts
+`--mode Pack-7`, `--role`, `--fixture`, and `--debug-hold`; the hold leaves DSZ
+waiting on its serial connection so heavy-debugger breakpoints can be set at
+`CS:739c`, `CS:831e`, or their callers before the relay starts. The ordinary
+interoperability run cross-checks the recovered paths with DSZ `-EP` in both
+roles.
 
 ## MobyTurbo negotiation and wire format
 

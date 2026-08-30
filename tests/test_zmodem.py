@@ -26,6 +26,7 @@ ZBIN = 0x41
 ZHEX = 0x42
 ZBIN32 = 0x43
 ZBINR32ESC8 = 0x31
+ZBINP7 = 0x32
 ZBINM32 = 0x33
 ZVBIN = 0x61
 ZVHEX = 0x62
@@ -128,6 +129,51 @@ def data_subpacket32(data, frame_end):
     return wire
 
 
+def omen_escaped(values):
+    special = {
+        0x0E: 0x6E, 0x10: 0x50, 0x11: 0x51, 0x13: 0x53,
+        0x18: 0x58, 0x80: 0x73, 0x8E: 0x6F, 0x90: 0x70,
+        0x91: 0x71, 0x93: 0x72, 0x98: 0x74, 0xFF: 0x6D,
+    }
+    result = bytearray()
+    for value in values:
+        if value in special:
+            result.extend((ZDLE, special[value]))
+        elif value & 0x80:
+            result.extend((0x0E, value & 0x7F))
+        else:
+            result.append(value)
+    return bytes(result)
+
+
+def pack7_group(values):
+    if not 1 <= len(values) <= 4:
+        raise ValueError("Pack-7 groups contain one through four bytes")
+    value = int.from_bytes(values, "big")
+    result = bytearray(len(values) + 1)
+    for index in range(len(result) - 1, -1, -1):
+        result[index] = 0x22 + value % 88
+        value //= 88
+    return bytes(result)
+
+
+def pack7_header(header):
+    check = zlib.crc32(header + OMEN_HEADER_CRC_SUFFIX) & 0xFFFFFFFF
+    return bytes((ZPAD, ZDLE, ZBINP7, 0x22 + len(header) - 1)) + \
+        omen_escaped(header + check.to_bytes(4, "little"))
+
+
+def pack7_data(data, frame_end):
+    wire = b"".join(pack7_group(data[offset:offset + 4])
+                    for offset in range(0, len(data), 4))
+    check = zlib.crc32(data + bytes((frame_end,))) & 0xFFFFFFFF
+    wire += bytes((0x21, frame_end))
+    wire += pack7_group(check.to_bytes(4, "little"))
+    if frame_end == ZCRCW:
+        wire += bytes((XON,))
+    return wire
+
+
 def mobyturbo_escaped(values):
     return bytes(value for byte in values
                  for value in ((ZDLE, byte ^ 0x40)
@@ -156,6 +202,7 @@ class Peer:
         self.buffer = bytearray()
         self.use_crc32 = False
         self.use_omen = False
+        self.use_pack7 = False
         self.use_mobyturbo = False
         self.require_escaped_controls = False
 
@@ -205,7 +252,7 @@ class Peer:
             if (zlib.crc32(header) & 0xFFFFFFFF) != \
                     int.from_bytes(raw[length:], "little"):
                 raise AssertionError("bad CRC in received CRC32 header")
-        elif style == ZBINR32ESC8:
+        elif style in (ZBINR32ESC8, ZBINP7):
             parameter_count = self.byte() - 0x22
             if not 0 <= parameter_count <= 16:
                 raise AssertionError("bad Omen ESC8 header length")
@@ -226,8 +273,10 @@ class Peer:
                 raise AssertionError("bad CRC in received MobyTurbo header")
         else:
             raise AssertionError(f"unexpected header style {style:#x}")
-        self.use_crc32 = style in (ZBIN32, ZVBIN32, ZBINR32ESC8, ZBINM32)
+        self.use_crc32 = style in (
+            ZBIN32, ZVBIN32, ZBINR32ESC8, ZBINP7, ZBINM32)
         self.use_omen = style == ZBINR32ESC8
+        self.use_pack7 = style == ZBINP7
         self.use_mobyturbo = style == ZBINM32
         return header[0], int.from_bytes(header[1:], "little"), header
 
@@ -325,6 +374,46 @@ class Peer:
             raise AssertionError("missing XON after Omen ZCRCW subpacket")
         return bytes(payload), frame_end
 
+    def _pack7_group(self):
+        value = 0
+        digits = 0
+        while digits < 5:
+            byte = self.byte()
+            if byte == 0x21:
+                if digits == 1:
+                    raise AssertionError("noncanonical one-digit Pack-7 group")
+                break
+            if not 0x22 <= byte <= 0x79:
+                raise AssertionError(f"bad Pack-7 digit {byte:#x}")
+            value = value * 88 + byte - 0x22
+            if value > 0xFFFFFFFF:
+                raise AssertionError("overflowing Pack-7 group")
+            digits += 1
+        count = 0 if digits == 0 else digits - 1
+        if value >= 1 << (8 * count):
+            raise AssertionError("noncanonical Pack-7 value")
+        return value.to_bytes(count, "big")
+
+    def _pack7_data(self):
+        payload = bytearray()
+        while True:
+            group = self._pack7_group()
+            payload.extend(group)
+            if len(group) < 4:
+                break
+        frame_end = self.byte()
+        if frame_end not in (ZCRCE, ZCRCG, ZCRCQ, ZCRCW):
+            raise AssertionError(f"bad Pack-7 frame end {frame_end:#x}")
+        check = self._pack7_group()
+        if len(check) != 4:
+            raise AssertionError("bad Pack-7 CRC group length")
+        expected = zlib.crc32(payload + bytes((frame_end,))) & 0xFFFFFFFF
+        if int.from_bytes(check, "little") != expected:
+            raise AssertionError("bad Pack-7 data CRC")
+        if frame_end == ZCRCW and self.byte() != XON:
+            raise AssertionError("missing XON after Pack-7 ZCRCW subpacket")
+        return bytes(payload), frame_end
+
     def _data_byte(self, *, require_escaped_8th=False):
         value = self.byte()
         if self.require_escaped_controls and value != ZDLE and \
@@ -358,6 +447,8 @@ class Peer:
         raise AssertionError(f"unexpected ZDLE sequence {value:#x}")
 
     def data(self, *, require_escaped_8th=False):
+        if self.use_pack7:
+            return self._pack7_data()
         if self.use_omen:
             return self._omen_data()
         if self.use_mobyturbo:
@@ -563,6 +654,61 @@ class ZmodemTests(unittest.TestCase):
                     process.kill()
                     process.wait()
 
+    def test_sender_uses_negotiated_pack7(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            payload = bytes((index * 73 + 19) & 0xFF
+                            for index in range(1027))
+            source = Path(temporary) / "pack7.bin"
+            source.write_bytes(payload)
+            process, peer, zrinit = self.begin_sender(
+                temporary, source.name, "-d", flags=0xA3, zf1=1)
+            try:
+                peer.send(variable_hex_header(
+                    bytes((ZRPOS, 0, 0, 0, 0, 0, 0, 2))))
+                frame_type, position, _ = peer.header()
+                self.assertEqual((frame_type, position), (ZDATA, 0))
+                self.assertTrue(peer.use_pack7)
+                received = bytearray()
+                while True:
+                    chunk, frame_end = peer.data()
+                    received.extend(chunk)
+                    if frame_end == ZCRCE:
+                        break
+                    self.assertEqual(frame_end, ZCRCG)
+                self.assertEqual(bytes(received), payload)
+                stderr = self.finish_sender(peer, process, zrinit,
+                                            len(payload))
+                self.assertIn(b"selected Pack-7", stderr)
+            finally:
+                peer.sock.close()
+                if process.poll() is None:
+                    process.kill()
+                    process.wait()
+
+    def test_sender_rejects_pack7_without_seven_bit_transport(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            source = Path(temporary) / "standard.bin"
+            source.write_bytes(b"Pack-7 requires ESC8")
+            process, peer, zrinit = self.begin_sender(
+                temporary, source.name, "-d", flags=0x23, zf1=1)
+            try:
+                peer.send(variable_hex_header(
+                    bytes((ZRPOS, 0, 0, 0, 0, 0, 0, 2))))
+                frame_type, position, _ = peer.header()
+                self.assertEqual((frame_type, position), (ZDATA, 0))
+                self.assertFalse(peer.use_pack7)
+                received, frame_end = peer.data()
+                self.assertEqual((received, frame_end),
+                                 (b"Pack-7 requires ESC8", ZCRCE))
+                stderr = self.finish_sender(peer, process, zrinit,
+                                            len(received))
+                self.assertIn(b"requested unavailable", stderr)
+            finally:
+                peer.sock.close()
+                if process.poll() is None:
+                    process.kill()
+                    process.wait()
+
     def test_receiver_requests_and_decodes_mobyturbo(self):
         with tempfile.TemporaryDirectory() as temporary:
             payload = bytes((XON, 0x13, 0x91, 0x93, ZDLE, 0xFF)) + \
@@ -591,6 +737,39 @@ class ZmodemTests(unittest.TestCase):
                                  stderr.decode(errors="replace"))
                 self.assertIn(b"MobyTurbo selected", stderr)
                 self.assertEqual((Path(temporary) / "moby.bin").read_bytes(),
+                                 payload)
+            finally:
+                peer.sock.close()
+                if process.poll() is None:
+                    process.kill()
+                    process.wait()
+
+    def test_receiver_requests_and_decodes_pack7(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            payload = bytes((index * 109 + 7) & 0xFF
+                            for index in range(1027))
+            process, peer = self.start_receiver(temporary, "-7", "-d")
+            try:
+                self.assertEqual(peer.initial_header[4] & ZF0_ESC8,
+                                 ZF0_ESC8)
+                info = b"pack7.bin\0" + \
+                    f"{len(payload)} 0 0 0 1 0\0".encode("ascii")
+                peer.send(hex_header(ZFILE) + data_subpacket(info, ZCRCW))
+                frame_type, _, header = peer.header()
+                self.assertEqual(frame_type, ZRPOS)
+                self.assertEqual(len(header), 8)
+                self.assertEqual(header[7] & 2, 2)
+                peer.send(pack7_header(bytes((ZDATA, 0, 0, 0, 0))) +
+                          pack7_data(payload[:MAX_SUBPACKET], ZCRCG) +
+                          pack7_data(payload[MAX_SUBPACKET:], ZCRCE) +
+                          pack7_header(bytes((ZEOF,)) +
+                                       len(payload).to_bytes(4, "little")))
+                frame_type, _, _ = peer.header()
+                self.assertEqual(frame_type, ZRINIT)
+                returncode, stderr = finish_receiver(peer, process)
+                self.assertEqual(returncode, 0,
+                                 stderr.decode(errors="replace"))
+                self.assertEqual((Path(temporary) / "pack7.bin").read_bytes(),
                                  payload)
             finally:
                 peer.sock.close()
@@ -910,6 +1089,7 @@ class ZmodemTests(unittest.TestCase):
         cases = (
             (("-e",), ZF0_ESCCTL),
             (("-b",), ZF0_ESC8),
+            (("-7",), ZF0_ESC8),
             (("-eb",), ZF0_ESCCTL | ZF0_ESC8),
         )
         for options, expected in cases:

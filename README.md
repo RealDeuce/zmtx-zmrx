@@ -170,6 +170,12 @@ for compatibility with implementations such as Qodem. See the
 [DSZ disassembly evidence](docs/omen-esc8-disassembly.md) for the recovered
 wire format and reproducible binary verification.
 
+`zmrx -7` requests Omen Pack-7 and implies `-b`. Pack-7 encodes four bytes as
+five printable seven-bit characters, avoiding the high-entropy expansion of
+SO quoting. A compatible sender selects the `0x32` format through an extended
+`ZRPOS`; otherwise the transfer continues in `0x31` mode. The CP/M receiver
+requests Pack-7 by default because compressed files are its common case.
+
 `zmtx -m` offers Omen's MobyTurbo extension and `zmrx -m` requests it.
 MobyTurbo uses CRC32 while escaping only `ZDLE` on a transparent connection,
 so bytes normally quoted or discarded as software flow control travel without

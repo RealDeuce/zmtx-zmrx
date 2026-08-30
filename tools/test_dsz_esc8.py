@@ -18,9 +18,13 @@ import test_dos  # noqa: E402
 
 
 PAYLOAD = bytes(range(256)) * 4 + b"A" * 130 + b" " * 70 + b"~" * 65
+PACK7_PAYLOADS = (
+    bytes((index * 73 + 19) & 0xFF for index in range(1027)),
+    b"A" * 511 + b" " * 384 + b"~" * 131,
+)
 
 
-def relay(peer, native, from_dos, from_native):
+def relay(peer, native, from_dos, from_native, seven_bit):
     peer.setblocking(False)
     os.set_blocking(native.stdout.fileno(), False)
     selector = selectors.DefaultSelector()
@@ -38,6 +42,8 @@ def relay(peer, native, from_dos, from_native):
                     selector.unregister(peer)
                     native.stdin.close()
                     continue
+                if seven_bit:
+                    data = bytes(value & 0x7F for value in data)
                 from_dos.extend(data)
                 native.stdin.write(data)
                 native.stdin.flush()
@@ -50,12 +56,16 @@ def relay(peer, native, from_dos, from_native):
                     except OSError:
                         pass
                     continue
+                if seven_bit:
+                    data = bytes(value & 0x7F for value in data)
                 from_native.extend(data)
                 peer.sendall(data)
 
 
-def transfer(dosbox, dsz, dsz_sender, option, mode):
-    label = f"DSZ {'sender' if dsz_sender else 'receiver'} {mode}"
+def transfer(dosbox, dsz, dsz_sender, option, mode, payload=PAYLOAD,
+             seven_bit=False, variant="", debug_hold=0.0):
+    suffix = f" {variant}" if variant else ""
+    label = f"DSZ {'sender' if dsz_sender else 'receiver'} {mode}{suffix}"
     with tempfile.TemporaryDirectory(prefix="zmodem-dsz-") as temporary:
         base = Path(temporary)
         dos_drive = base / "dos"
@@ -65,7 +75,7 @@ def transfer(dosbox, dsz, dsz_sender, option, mode):
         shutil.copy2(dsz, dos_drive / "DSZ.EXE")
         source = dos_drive if dsz_sender else native_drive
         destination = native_drive if dsz_sender else dos_drive
-        (source / "payload.bin").write_bytes(PAYLOAD)
+        (source / "payload.bin").write_bytes(payload)
 
         action = f"sz {option} PAYLOAD.BIN" if dsz_sender else f"rz {option}"
         batch = (
@@ -101,8 +111,13 @@ def transfer(dosbox, dsz, dsz_sender, option, mode):
         from_dos = bytearray()
         from_native = bytearray()
         try:
+            if debug_hold > 0.0:
+                print(f"{label}: holding serial connection for "
+                      f"{debug_hold:g} seconds")
+                time.sleep(debug_hold)
             peer = test_dos.connect(port, dos)
             native_option = "-bv" if mode == "ESC8" and dsz_sender else \
+                "-7v" if mode == "Pack-7" and dsz_sender else \
                 "-mv" if mode == "MobyTurbo" else "-v"
             command = [str(ROOT / ("zmrx" if dsz_sender else "zmtx")),
                        native_option]
@@ -112,7 +127,7 @@ def transfer(dosbox, dsz, dsz_sender, option, mode):
                 command, cwd=native_drive, stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE, stderr=subprocess.PIPE)
             try:
-                relay(peer, native, from_dos, from_native)
+                relay(peer, native, from_dos, from_native, seven_bit)
                 native.wait(timeout=5)
                 dos.wait(timeout=5)
             except Exception as error:
@@ -138,7 +153,7 @@ def transfer(dosbox, dsz, dsz_sender, option, mode):
                 f"last DOS bytes: {from_dos[-1024:].hex()}\n"
                 f"last native bytes: {from_native[-1024:].hex()}\n"
                 f"{dos_output}")
-        if test_dos.find_received(destination).read_bytes() != PAYLOAD:
+        if test_dos.find_received(destination).read_bytes() != payload:
             raise RuntimeError(f"{label} did not preserve the payload")
         print(f"{label} transfer passed")
 
@@ -148,6 +163,15 @@ def main():
     parser.add_argument("dsz", type=Path, help="Omen DSZ.EXE")
     parser.add_argument("--dosbox", default=os.environ.get("DOSBOX", "dosbox"))
     parser.add_argument("--timeout", type=float, default=60)
+    parser.add_argument("--mode", choices=("all", "ESC8", "MobyTurbo",
+                                            "Pack-7"), default="all",
+                        help="run only one wire mode")
+    parser.add_argument("--role", choices=("both", "sender", "receiver"),
+                        default="both", help="limit the DSZ role")
+    parser.add_argument("--fixture", type=int, choices=(1, 2),
+                        help="limit Pack-7 to one fixture")
+    parser.add_argument("--debug-hold", type=float, default=0.0,
+                        help="delay the serial connection for a debugger")
     args = parser.parse_args()
     test_dos.TIMEOUT = args.timeout
     subprocess.run(
@@ -155,11 +179,25 @@ def main():
          str(args.dsz)], check=True)
     if shutil.which(args.dosbox) is None:
         raise SystemExit(f"DOSBox not found: {args.dosbox}")
-    for option, mode in (("-E", "ESC8"), ("-m", "MobyTurbo")):
-        transfer(args.dosbox, args.dsz, dsz_sender=True,
-                 option=option, mode=mode)
-        transfer(args.dosbox, args.dsz, dsz_sender=False,
-                 option=option, mode=mode)
+    roles = (True, False) if args.role == "both" else \
+        (args.role == "sender",)
+    for option, mode, seven_bit in (
+            ("-E", "ESC8", True), ("-m", "MobyTurbo", False)):
+        if args.mode not in ("all", mode):
+            continue
+        for dsz_sender in roles:
+            transfer(args.dosbox, args.dsz, dsz_sender=dsz_sender,
+                     option=option, mode=mode, seven_bit=seven_bit,
+                     debug_hold=args.debug_hold)
+    if args.mode in ("all", "Pack-7"):
+        for index, payload in enumerate(PACK7_PAYLOADS, 1):
+            if args.fixture is not None and args.fixture != index:
+                continue
+            for dsz_sender in roles:
+                transfer(args.dosbox, args.dsz, dsz_sender=dsz_sender,
+                         option="-EP", mode="Pack-7", payload=payload,
+                         seven_bit=True, variant=f"fixture {index}",
+                         debug_hold=args.debug_hold)
 
 
 if __name__ == "__main__":

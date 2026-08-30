@@ -450,7 +450,7 @@ static const uint8_t omen_header_crc_suffix[] =
 
 static int
 tx_omen_header(struct zmodem * restrict zmodem,
-    const uint8_t * restrict p,size_t count)
+    uint8_t style,const uint8_t * restrict p,size_t count)
 
 {
 	size_t i;
@@ -462,7 +462,7 @@ tx_omen_header(struct zmodem * restrict zmodem,
 	if (tx_raw(zmodem,ZDLE) != 0) {
 		return -1;
 	}
-	if (tx_raw(zmodem,ZBINR32ESC8) != 0) {
+	if (tx_raw(zmodem,style) != 0) {
 		return -1;
 	}
 	if (tx_raw(zmodem,UINT8_C(0x22) + (uint8_t)(count - 1U)) != 0) {
@@ -573,7 +573,8 @@ tx_header_length(struct zmodem * restrict zmodem,
 		return -1;
 	}
 	if (zmodem->escape_8th_bit) {
-		return tx_omen_header(zmodem,p,count);
+		return tx_omen_header(zmodem,
+		    zmodem->use_pack7 ? ZBINP7 : ZBINR32ESC8,p,count);
 	}
 	if (zmodem->use_mobyturbo) {
 		return tx_mobyturbo_header(zmodem,p,count);
@@ -841,6 +842,85 @@ tx_omen_data(struct zmodem * restrict zmodem,uint8_t sub_frame_type,
 	return tx_flush(zmodem);
 }
 
+/*
+ * DSZ Pack-7 represents one through four bytes as a big-endian integer in
+ * exactly two through five base-88 digits.  The printable digit alphabet is
+ * 0x22 through 0x79.  Since 88^5 is greater than 2^32, every four-byte value
+ * has one unique representation.
+ */
+static size_t
+pack7_encode_group(const uint8_t * input,size_t count,uint8_t output[5])
+
+{
+	uint32_t value = 0U;
+	size_t digits = count + 1U;
+	size_t i;
+
+	for (i=0U;i<count;i++) {
+		value = (value << 8) | input[i];
+	}
+	for (i=digits;i>0U;i--) {
+		output[i - 1U] = (uint8_t)(value % UINT32_C(88)) + UINT8_C(0x22);
+		value /= UINT32_C(88);
+	}
+	return digits;
+}
+
+static void
+buffer_pack7_group(struct omen_tx_buffer * output,const uint8_t * input,
+    size_t count)
+
+{
+	uint8_t encoded[5];
+	size_t digits = pack7_encode_group(input,count,encoded);
+	size_t i;
+
+	for (i=0U;i<digits;i++) {
+		(void)buffer_omen_raw(output,encoded[i]);
+	}
+}
+
+static int
+tx_pack7_data(struct zmodem * restrict zmodem,uint8_t sub_frame_type,
+    const uint8_t * restrict data,size_t length)
+
+{
+	struct omen_tx_buffer output;
+	uint8_t crc_bytes[4];
+	uint32_t crc;
+	size_t offset;
+
+	output.zmodem = zmodem;
+	output.used = 0U;
+	output.previous = zmodem->last_sent;
+	for (offset=0U;offset<length;) {
+		size_t count = length - offset;
+
+		if (count > 4U) {
+			count = 4U;
+		}
+		buffer_pack7_group(&output,&data[offset],count);
+		offset += count;
+	}
+	(void)buffer_omen_raw(&output,UINT8_C(0x21));
+	(void)buffer_omen_raw(&output,sub_frame_type);
+	crc = ~crc32_byte_update(crc32_update(UINT32_MAX,data,length),
+	    sub_frame_type);
+	for (offset=0U;offset<sizeof(crc_bytes);offset++) {
+		crc_bytes[offset] = (uint8_t)crc;
+		crc >>= 8;
+	}
+	buffer_pack7_group(&output,crc_bytes,sizeof(crc_bytes));
+	if (sub_frame_type == ZCRCW) {
+		(void)buffer_omen_raw(&output,XON);
+	}
+	if (flush_omen_tx_buffer(&output) != 0) {
+		return -1;
+	}
+	zmodem->last_sent = output.previous;
+	return tx_flush(zmodem);
+}
+
 #if defined(UINT64_MAX) && !defined(ZMODEM_FORCE_32BIT_SPAN)
 typedef uint64_t span_word;
 #define SPAN_WORD_ONES UINT64_C(0x0101010101010101)
@@ -925,6 +1005,9 @@ tx_data(struct zmodem * restrict zmodem,uint8_t sub_frame_type,
 		return -1;
 	}
 	if (zmodem->escape_8th_bit) {
+		if (zmodem->use_pack7) {
+			return tx_pack7_data(zmodem,sub_frame_type,p,l);
+		}
 		return tx_omen_data(zmodem,sub_frame_type,p,l);
 	}
 	if (zmodem->use_mobyturbo) {
@@ -1897,6 +1980,133 @@ rx_rle_data(struct zmodem * restrict zmodem,uint8_t * restrict p,
 	return sub_frame_type;
 }
 
+static int
+rx_pack7_group(struct zmodem * restrict zmodem,int timeout_ms,
+    struct rx_cursor * restrict cursor,uint8_t output[4],size_t * count)
+
+{
+	uint32_t value = 0U;
+	size_t digits = 0U;
+	size_t bytes;
+	size_t i;
+
+	for (;;) {
+		int c = rx_omen_cursor(zmodem,timeout_ms,cursor);
+		uint32_t digit;
+
+		if (c < 0) {
+			return c;
+		}
+		if (c > UINT8_MAX) {
+			return ZMODEM_INVALID_DATA;
+		}
+		if (c == 0x21) {
+			if (digits == 1U) {
+				return ZMODEM_INVALID_DATA;
+			}
+			break;
+		}
+		if (c < 0x22 || c > 0x79) {
+			return ZMODEM_INVALID_DATA;
+		}
+		digit = (uint32_t)(c - 0x22);
+		if (value > (UINT32_MAX - digit) / UINT32_C(88)) {
+			return ZMODEM_INVALID_DATA;
+		}
+		value = value * UINT32_C(88) + digit;
+		digits += 1U;
+		if (digits == 5U) {
+			break;
+		}
+	}
+	bytes = digits == 0U ? 0U : digits - 1U;
+	if (bytes < 4U && value >= (UINT32_C(1) << (bytes * 8U))) {
+		return ZMODEM_INVALID_DATA;
+	}
+	for (i=bytes;i>0U;i--) {
+		output[i - 1U] = (uint8_t)value;
+		value >>= 8;
+	}
+	*count = bytes;
+	return ZMODEM_OK;
+}
+
+static int
+rx_pack7_data(struct zmodem * restrict zmodem,uint8_t * restrict p,
+    size_t capacity,size_t * restrict length)
+
+{
+	uint8_t decoded[4];
+	size_t limit = capacity < ZMAXSPLEN ? capacity : ZMAXSPLEN;
+	size_t used = 0U;
+	uint32_t crc = UINT32_MAX;
+	uint32_t received_crc;
+	bool overflow = false;
+	int sub_frame_type;
+	struct rx_cursor cursor;
+
+	load_rx_cursor(zmodem,&cursor);
+	for (;;) {
+		size_t count;
+		size_t i;
+		int result = rx_pack7_group(zmodem,1000,&cursor,decoded,&count);
+
+		if (result != ZMODEM_OK) {
+			store_rx_cursor(zmodem,&cursor);
+			*length = used;
+			return result;
+		}
+		for (i=0U;i<count;i++) {
+			crc = crc32_byte_update(crc,decoded[i]);
+			if (used < limit) {
+				p[used++] = decoded[i];
+			}
+			else {
+				overflow = true;
+			}
+		}
+		if (count < 4U) {
+			break;
+		}
+	}
+	{
+		int c = rx_omen_cursor(zmodem,1000,&cursor);
+
+		if (c < 0) {
+			store_rx_cursor(zmodem,&cursor);
+			*length = used;
+			return c;
+		}
+		if (c < ZCRCE || c > ZCRCW) {
+			store_rx_cursor(zmodem,&cursor);
+			*length = used;
+			return ZMODEM_INVALID_DATA;
+		}
+		sub_frame_type = c;
+	}
+	crc = ~crc32_byte_update(crc,(uint8_t)sub_frame_type);
+	{
+		size_t count;
+		int result = rx_pack7_group(zmodem,1000,&cursor,decoded,&count);
+
+		if (result != ZMODEM_OK || count != sizeof(decoded)) {
+			store_rx_cursor(zmodem,&cursor);
+			*length = used;
+			return result == ZMODEM_OK ? ZMODEM_INVALID_DATA : result;
+		}
+	}
+	received_crc = (uint32_t)decoded[0] |
+	    ((uint32_t)decoded[1] << 8) |
+	    ((uint32_t)decoded[2] << 16) |
+	    ((uint32_t)decoded[3] << 24);
+	store_rx_cursor(zmodem,&cursor);
+	*length = used;
+	if (received_crc != crc || overflow) {
+		return ZMODEM_INVALID_DATA;
+	}
+	return sub_frame_type;
+}
+
 int
 rx_data(struct zmodem * restrict zmodem,uint8_t * restrict p,
     size_t capacity,size_t * restrict l,uint8_t * restrict frame_end)
@@ -1911,8 +2121,13 @@ rx_data(struct zmodem * restrict zmodem,uint8_t * restrict p,
 	*l = 0;
 	*frame_end = 0;
 
-	if (zmodem->receive_rle_data) {
-		sub_frame_type = rx_rle_data(zmodem,p,capacity,l);
+	if (zmodem->receive_encoded_data != ZMODEM_ENCODED_DATA_NONE) {
+		if (zmodem->receive_encoded_data == ZMODEM_ENCODED_DATA_PACK7) {
+			sub_frame_type = rx_pack7_data(zmodem,p,capacity,l);
+		}
+		else {
+			sub_frame_type = rx_rle_data(zmodem,p,capacity,l);
+		}
 	}
 	else if (zmodem->receive_32_bit_data) {
 		sub_frame_type = rx_32_data(zmodem,p,capacity,l);
@@ -2187,7 +2402,8 @@ rx_variable_length(struct zmodem * zmodem,int timeout_ms,bool hex)
 }
 
 static int
-rx_omen_header(struct zmodem * zmodem,int timeout_ms)
+rx_omen_header(struct zmodem * zmodem,int timeout_ms,
+    enum zmodem_encoded_data_format format)
 
 {
 	struct rx_cursor cursor;
@@ -2245,7 +2461,7 @@ rx_omen_header(struct zmodem * zmodem,int timeout_ms)
 	}
 	zmodem->rxd_header_len = count;
 	zmodem->receive_32_bit_data = true;
-	zmodem->receive_rle_data = true;
+	zmodem->receive_encoded_data = format;
 	zmodem->receive_escape8_format = ZMODEM_ESCAPE8_OMEN;
 	return ZMODEM_OK;
 }
@@ -2295,7 +2511,7 @@ rx_mobyturbo_header(struct zmodem * zmodem,int timeout_ms)
 	}
 	zmodem->rxd_header_len = count;
 	zmodem->receive_32_bit_data = true;
-	zmodem->receive_rle_data = false;
+	zmodem->receive_encoded_data = ZMODEM_ENCODED_DATA_NONE;
 	zmodem->receive_escape8_format = ZMODEM_ESCAPE8_NONE;
 	return ZMODEM_OK;
 }
@@ -2375,7 +2591,13 @@ rx_header_raw(struct zmodem * zmodem,int timeout_ms,bool report_errors)
 		switch (c & 0x7f) {
 			case ZBINR32ESC8:
 				zmodem->receive_mobyturbo = false;
-				result = rx_omen_header(zmodem,timeout_ms);
+				result = rx_omen_header(zmodem,timeout_ms,
+				    ZMODEM_ENCODED_DATA_RLE);
+				break;
+			case ZBINP7:
+				zmodem->receive_mobyturbo = false;
+				result = rx_omen_header(zmodem,timeout_ms,
+				    ZMODEM_ENCODED_DATA_PACK7);
 				break;
 			case ZBINM32:
 				result = rx_mobyturbo_header(zmodem,timeout_ms);
@@ -2384,25 +2606,25 @@ rx_header_raw(struct zmodem * zmodem,int timeout_ms,bool report_errors)
 				zmodem->receive_mobyturbo = false;
 				result = rx_bin16_header(zmodem,timeout_ms,HDRLEN);
 				zmodem->receive_32_bit_data = false;
-				zmodem->receive_rle_data = false;
+				zmodem->receive_encoded_data = ZMODEM_ENCODED_DATA_NONE;
 				break;
 			case ZHEX:
 				zmodem->receive_mobyturbo = false;
 				result = rx_hex_header(zmodem,timeout_ms,HDRLEN);
 				zmodem->receive_32_bit_data = false;
-				zmodem->receive_rle_data = false;
+				zmodem->receive_encoded_data = ZMODEM_ENCODED_DATA_NONE;
 				break;
 			case ZBIN32:
 				zmodem->receive_mobyturbo = false;
 				result = rx_bin32_header(zmodem,timeout_ms,HDRLEN);
 				zmodem->receive_32_bit_data = true;
-				zmodem->receive_rle_data = false;
+				zmodem->receive_encoded_data = ZMODEM_ENCODED_DATA_NONE;
 				break;
 			case ZBINR32:
 				zmodem->receive_mobyturbo = false;
 				result = rx_bin32_header(zmodem,timeout_ms,HDRLEN);
 				zmodem->receive_32_bit_data = true;
-				zmodem->receive_rle_data = true;
+				zmodem->receive_encoded_data = ZMODEM_ENCODED_DATA_RLE;
 				break;
 			case ZVBIN:
 				zmodem->receive_mobyturbo = false;
@@ -2412,7 +2634,7 @@ rx_header_raw(struct zmodem * zmodem,int timeout_ms,bool report_errors)
 					    (size_t)result);
 				}
 				zmodem->receive_32_bit_data = false;
-				zmodem->receive_rle_data = false;
+				zmodem->receive_encoded_data = ZMODEM_ENCODED_DATA_NONE;
 				break;
 			case ZVHEX:
 				zmodem->receive_mobyturbo = false;
@@ -2422,7 +2644,7 @@ rx_header_raw(struct zmodem * zmodem,int timeout_ms,bool report_errors)
 					    (size_t)result);
 				}
 				zmodem->receive_32_bit_data = false;
-				zmodem->receive_rle_data = false;
+				zmodem->receive_encoded_data = ZMODEM_ENCODED_DATA_NONE;
 				break;
 			case ZVBIN32:
 			case ZVBINR32:
@@ -2438,8 +2660,10 @@ rx_header_raw(struct zmodem * zmodem,int timeout_ms,bool report_errors)
 					}
 				}
 				zmodem->receive_32_bit_data = true;
-				zmodem->receive_rle_data =
-				    (c & 0x7f) == ZVBINR32;
+				zmodem->receive_encoded_data =
+				    (c & 0x7f) == ZVBINR32 ?
+				    ZMODEM_ENCODED_DATA_RLE :
+				    ZMODEM_ENCODED_DATA_NONE;
 				break;
 			default:
 				if (report_errors) {

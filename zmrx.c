@@ -75,6 +75,7 @@ static bool opt_m = false;
 static bool opt_M = false;
 static bool opt_escape_control = false;
 static bool opt_escape_8th_bit = ZMODEM_PLAT_DEFAULT_ESCAPE_8TH_BIT;
+static bool opt_pack7 = ZMODEM_PLAT_DEFAULT_PACK7;
 static bool junk_pathnames = ZMODEM_PLAT_DEFAULT_JUNK_PATHNAMES;	/* junk incoming path names or keep them */
 static uint8_t rx_data_subpacket[ZMAXSPLEN];
 static uint8_t attention_sequence[ZATTNLEN];
@@ -209,13 +210,22 @@ static int
 tx_zrpos(uint32_t position)
 
 {
-	uint8_t header[ZMOBY_ZRPOS_HEADER_LEN] = { ZRPOS, 0, 0, 0, 0, 0, 0, 0 };
+	uint8_t header[ZMODEM90_ZRPOS_HEADER_LEN] = {
+		ZRPOS, 0, 0, 0, 0, 0, 0, 0
+	};
+	uint8_t flags = 0U;
 
 	zmodem_set_header_position(header,position);
-	if (!current_mobyturbo) {
+	if (current_mobyturbo) {
+		flags |= ZMODEM90_REQUEST_MOBYTURBO;
+	}
+	if (opt_pack7) {
+		flags |= ZMODEM90_REQUEST_PACK7;
+	}
+	if (flags == 0U) {
 		return tx_header(&protocol,header);
 	}
-	header[ZMOBY_ZRPOS_FLAGS] = ZMOBY_REQUEST;
+	header[ZMODEM90_ZRPOS_FLAGS] = flags;
 	return tx_header_length(&protocol,header,sizeof(header));
 }
 
@@ -531,7 +541,8 @@ receive_file(void)
 	bool management_selected = false;
 
 	receive_error_reported = false;
-	current_mobyturbo = !opt_M && protocol.mobyturbo_probe_passed &&
+	current_mobyturbo = !opt_M && !opt_escape_8th_bit &&
+	    protocol.mobyturbo_probe_passed &&
 	    (opt_m || (protocol.rxd_header[ZF3] & ZF3_ZMOBY) != 0U);
 	if (opt_d && (opt_m || (protocol.rxd_header[ZF3] & ZF3_ZMOBY) != 0U)) {
 		(void)fprintf(stderr,"zmrx: MobyTurbo %s\n",
@@ -931,6 +942,7 @@ usage(void)
 	(void)printf("	-s          request non-streaming transfers\n");
 	(void)printf("	-e          request control-character escaping\n");
 	(void)printf("	-b          request high-bit-byte escaping\n");
+	(void)printf("	-7          request Omen Pack-7 (implies -b)\n");
 	(void)printf("	-m          request Omen MobyTurbo on transparent links\n");
 	(void)printf("	-M          refuse Omen MobyTurbo\n");
 	(void)printf("	(only one of -n -o or -p may be specified)\n");
@@ -982,6 +994,11 @@ main(int argc,char ** argv)
 			}
 			if (raw_option == 'M') {
 				opt_M = true;
+				continue;
+			}
+			if (raw_option == '7') {
+				opt_pack7 = true;
+				opt_escape_8th_bit = true;
 				continue;
 			}
 

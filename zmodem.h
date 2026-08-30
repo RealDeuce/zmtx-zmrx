@@ -80,7 +80,7 @@
 
 /* Omen ZMODEM-90 7-bit formats recovered from DSZ.EXE 1997-05-25. */
 #define	ZBINR32ESC8	UINT8_C(0x31)	/* RLE, CRC32, and eighth-bit quoting */
-#define	ZBINP7		UINT8_C(0x32)	/* Pack-7 (not implemented) */
+#define	ZBINP7		UINT8_C(0x32)	/* Pack-7 and CRC32 */
 #define	ZBINM32		UINT8_C(0x33)	/* MobyTurbo: transparent CRC32 */
 
 #define	ZVBIN		UINT8_C(0x61)	/* binary frame indicator (CRC16) */
@@ -218,9 +218,11 @@
 
 /* Omen ZMODEM-90 MobyTurbo negotiation in ZFILE and extended ZRPOS. */
 #define ZF3_ZMOBY	UINT8_C(0x04)
-#define ZMOBY_ZRPOS_FLAGS UINT8_C(7)
-#define ZMOBY_ZRPOS_HEADER_LEN UINT8_C(8)
-#define ZMOBY_REQUEST	UINT8_C(0x01)
+#define ZMODEM90_ZRPOS_FLAGS UINT8_C(7)
+#define ZMODEM90_ZRPOS_HEADER_LEN UINT8_C(8)
+#define ZMODEM90_REQUEST_MOBYTURBO UINT8_C(0x01)
+#define ZMODEM90_REQUEST_PACK7 UINT8_C(0x02)
+#define ZMODEM90_REQUEST_RLE UINT8_C(0x04)
 								/* Receiver window size override */
 #define ZF3_ZRWOVR 		UINT8_C(0x04)	/* byte position for receive window override/256 */
 #define ZF3_ZXSPARS		UINT8_C(0x40)	/* encoding for sparse file operations */

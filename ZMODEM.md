@@ -897,7 +897,7 @@ approach that of full streaming.  For example, 16 KB segmented
 streaming adds about 3 per cent to full streaming ZMODEM file
 transfer times when the round trip delay is five seconds.
 
-## Omen ZMODEM-90 seven-bit and RLE framing
+## Omen ZMODEM-90 seven-bit, Pack-7, and RLE framing
 
 The published text names `ESC8`, `ZBINR32`, and `ZTRLE` without completely
 specifying their wire representation. The following format is recovered from
@@ -930,6 +930,25 @@ the following tokens:
 Long runs are split at 63 bytes. Standard `ZBINR32` uses the same RLE token
 grammar and CRC32 calculation with ordinary ZDLE quoting instead of the
 seven-bit layer.
+
+### Pack-7 framing
+
+Pack-7 is negotiated with bit `0x02` in parameter six of an extended `ZRPOS`.
+It uses the same quoted, salted-CRC32 header as `0x31`, with indicator `0x32`.
+The sender remains in `0x31` mode when the request is absent or ignored.
+
+Each group of one through four data bytes is interpreted as a big-endian
+integer and encoded as exactly two through five base-88 digits. Digits are
+most-significant first and use values `0x22` through `0x79`. The sender emits
+`0x21` after the final group, followed directly by the raw subpacket terminator.
+CRC32 covers the decoded data and terminator; its four little-endian bytes are
+encoded as one final five-digit group. `ZCRCW` retains the normal trailing
+`XON`.
+
+Canonical partial groups contain zero, two, three, or four digits before
+`0x21`, yielding zero through three bytes. Receivers reject digits outside the
+base-88 alphabet, one-digit partial groups, arithmetic overflow, premature
+terminators, and non-five-digit CRC groups.
 
 ### MobyTurbo transparent framing
 
@@ -989,6 +1008,7 @@ benefit.
 | `ZBIN32` | `0x43` | Binary frame indicator (CRC32) |
 | `ZBINR32` | `0x44` | Run Length encoded binary frame (CRC32) |
 | `ZBINR32ESC8` | `0x31` | Omen RLE, CRC32, and seven-bit-safe eighth-bit quoting |
+| `ZBINP7` | `0x32` | Omen Pack-7 and CRC32 framing |
 | `ZBINM32` | `0x33` | Omen MobyTurbo transparent CRC32 framing |
 | `ZVBIN` | `0x61` | Binary frame indicator (CRC16) |
 | `ZVHEX` | `0x62` | Hex frame indicator |

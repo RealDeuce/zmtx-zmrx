@@ -60,6 +60,12 @@ enum zmodem_escape8_format {
 	ZMODEM_ESCAPE8_OMEN
 };
 
+enum zmodem_encoded_data_format {
+	ZMODEM_ENCODED_DATA_NONE,
+	ZMODEM_ENCODED_DATA_RLE,
+	ZMODEM_ENCODED_DATA_PACK7
+};
+
 #define ENDOFFRAME ZMODEM_END_OF_FRAME
 #define FRAMEOK ZMODEM_FRAME_OK
 #define TIMEOUT ZMODEM_TIMEOUT
@@ -100,7 +106,8 @@ struct zmodem {
 	bool management_clobber;
 	bool management_protect;
 	bool receive_32_bit_data;
-	bool receive_rle_data;
+	enum zmodem_encoded_data_format receive_encoded_data;
+	bool use_pack7;
 	bool use_mobyturbo;
 	bool receive_mobyturbo;
 	bool mobyturbo_probe_passed;
