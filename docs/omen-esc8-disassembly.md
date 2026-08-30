@@ -1,9 +1,12 @@
-# Omen ESC8 and RLE disassembly evidence
+# Omen ESC8, RLE, and MobyTurbo disassembly evidence
 
 The public ZMODEM text names `ESC8`, `ZBINR32`, and `ZTRLE`, but does not
 fully specify Omen's seven-bit wire format. The implementation in this tree is
 therefore based on the 1997 Omen Technology `DSZ.EXE`, treated as normative,
 and not on behavioral guessing.
+
+The same executable defines the private MobyTurbo (`0x33`) transparent mode
+and its negotiation. No whole-frame format was inferred from black-box output.
 
 The researched executable is the `DSZ.EXE` distributed in `dszexe.zip` at
 <https://www.bbsing.com/bbsprotocols/>. Neither archive nor executable is
@@ -16,13 +19,14 @@ redistributed here.
 
 Run `python3 tools/verify_dsz_esc8.py DSZ.EXE --disassemble` to verify the
 exact binary and reproduce the relevant 16-bit x86 disassembly. The verifier
-checks the complete executable, MZ load offset, each cited routine, and the
-CRC string independently before invoking `ndisasm`.
+checks the complete executable, MZ load offset, the ESC8 routine ranges, and
+the CRC string independently before invoking `ndisasm`; its disassembly output
+also includes every MobyTurbo range cited below.
 
 After building the native programs, an optional two-direction DOSBox check is
 available as `python3 tools/test_dsz_esc8.py DSZ.EXE`. It verifies the binary,
-runs DSZ as both sender and receiver with `-E`, and checks an all-byte and
-RLE-heavy payload. DSZ is deliberately absent from the repository and CI.
+runs DSZ as both sender and receiver with `-E` and `-m`, and checks an all-byte
+and RLE-heavy payload. DSZ is deliberately absent from the repository and CI.
 
 ## Recovered format
 
@@ -39,6 +43,20 @@ image and therefore match the displayed `CS` offsets.
 | `CS:8642-8777` | Seven-bit quoted-byte decoder |
 | `CS:8a7e-8d31` | RLE, CRC32, and seven-bit data encoder |
 | `CS:8f9a-91f7` | Seven-bit, CRC32, and RLE data decoder |
+
+MobyTurbo is mode 3 in the same dispatcher. Its additional paths are:
+
+| Address | Function established by data flow and callers |
+| --- | --- |
+| `CS:0a44`, `CS:0b2c` | `-M` veto and `-m` request option state |
+| `CS:5121-5160` | Set `ZFILE.ZF3` bit `0x04` and transmit `23 c1 d4 93 11` probe |
+| `CS:5450-547e` | Sender selects mode 3 from extended `ZRPOS` parameter six bit 0 |
+| `CS:6696-66cc` | Receiver emits the seven-parameter `ZRPOS` request |
+| `CS:6fac-71d3` | Header dispatcher and `0x33` salted-CRC32 encoder |
+| `CS:761b-7646` | Transparent data encoder: quote `ZDLE`, pass other bytes |
+| `CS:76d5-7803` | MobyTurbo data receive and CRC32 path |
+| `CS:7cc2-8055` | Variable `0x33` header receiver and salted CRC32 check |
+| `CS:850e-8641` | Mode-3 quoted-byte decoder, retaining raw flow-control bytes |
 
 An `0x31` header begins with `ZPAD ZDLE 0x31`. The next raw seven-bit byte is
 `0x22 + parameter_count`; a normal four-parameter header therefore uses
@@ -68,6 +86,25 @@ bytes. `ZRESC` (`0x7e`) introduces RLE:
 
 Longer runs are divided at 63 bytes. The receiver routines perform the exact
 inverse and check CRC32 over tokens before accepting the expanded output.
+
+## MobyTurbo negotiation and wire format
+
+DSZ calls internal mode 3 “MobyTurbo.” A sender emits the five raw bytes
+`23 c1 d4 93 11` immediately before `ZFILE` and uses `ZFILE.ZF3` bit `0x04`
+to offer the mode. The receiver records success only when all five values,
+including high-bit flow-control lookalikes, arrive unchanged. It requests the
+mode with a seven-parameter variable `ZRPOS`; parameters four and five are
+zero, and parameter six bit 0 is the MobyTurbo request. (`0x02` and `0x04` in
+that parameter select Pack-7 and RLE.) The sender enters mode 3 only after
+receiving this request.
+
+Mode 3 headers begin `ZPAD ZDLE 0x33`. The following byte is the ordinary,
+unoffset parameter count. CRC32 is little-endian and covers the header bytes
+plus the same Omen copyright string used by `0x31`; the count itself is not
+covered. Data is neither RLE-compressed nor seven-bit encoded. It is CRC32
+protected and every value is literal except `ZDLE`, which is emitted as
+`ZDLE ZDLEE`. Conversely, the mode-3 decoder returns raw XON/XOFF values as
+data instead of applying the standard receiver's flow-control discard rule.
 
 ## Independent cross-check
 

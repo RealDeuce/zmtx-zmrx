@@ -101,6 +101,9 @@ struct zmodem {
 	bool management_protect;
 	bool receive_32_bit_data;
 	bool receive_rle_data;
+	bool use_mobyturbo;
+	bool receive_mobyturbo;
+	bool mobyturbo_probe_passed;
 	bool want_fcs_32;
 	uint8_t input_buffer[ZMODEM_INPUT_CAPACITY];
 	size_t input_count;
@@ -133,7 +136,10 @@ int tx_data(struct zmodem * restrict,uint8_t,
     const uint8_t * restrict,size_t);
 int tx_flush(struct zmodem *);
 int tx_header(struct zmodem * restrict,const uint8_t * restrict);
+int tx_header_length(struct zmodem * restrict,const uint8_t * restrict,
+    size_t);
 int tx_hex_header(struct zmodem * restrict,const uint8_t * restrict);
+int tx_mobyturbo_probe(struct zmodem *);
 int tx_pos_header(struct zmodem *,uint8_t,uint32_t);
 int tx_raw(struct zmodem *,int);
 int tx_znak(struct zmodem *);

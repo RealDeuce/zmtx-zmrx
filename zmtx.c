@@ -63,6 +63,8 @@ static struct zmodem_plat_io plat_io;
 static bool opt_v = false;				/* show progress output */
 static bool opt_d = false;				/* show debug output */
 static bool opt_s = ZMODEM_PLAT_DEFAULT_NONSTREAMING;	/* disable streaming */
+static bool opt_m = false;				/* offer MobyTurbo */
+static bool opt_M = false;				/* refuse MobyTurbo */
 static char * window_argument;
 static size_t subpacket_size = ZBLOCKLEN;		/* current data subpacket size */
 static size_t max_subpacket_size = ZBLOCKLEN;		/* selected maximum data subpacket size */
@@ -218,6 +220,21 @@ parse_zrinit(void)
 	    (protocol.rxd_header[ZF1] & ZF1_CANVHDR) != 0;
 	receiver_buffer_size = (uint16_t)protocol.rxd_header[ZP0] |
 	    (uint16_t)((uint16_t)protocol.rxd_header[ZP1] << 8);
+}
+
+static void
+select_zrpos_encoding(void)
+
+{
+	bool requested = protocol.rxd_header_len > ZMOBY_ZRPOS_FLAGS &&
+	    (protocol.rxd_header[ZMOBY_ZRPOS_FLAGS] & ZMOBY_REQUEST) != 0U;
+
+	protocol.use_mobyturbo = requested && !opt_M &&
+	    !protocol.escape_8th_bit;
+	if (opt_d && requested) {
+		(void)fprintf(stderr,"zmtx: receiver %s MobyTurbo\n",
+		    protocol.use_mobyturbo ? "selected" : "requested unavailable");
+	}
 }
 
 static void
@@ -745,7 +762,10 @@ send_file(const char * name)
 	 * extended options
 	 */
 
-	zfile_frame[ZF3] = 0;
+	zfile_frame[ZF3] = ZF3_ZCANVHDR;
+	if (opt_m && !opt_M) {
+		zfile_frame[ZF3] |= ZF3_ZMOBY;
+	}
 
 	/*
  	 * now build the data subpacket with the file name and lots of other
@@ -793,6 +813,7 @@ send_file(const char * name)
 	p += (size_t)written + 1;
 
 	type = TIMEOUT;
+	protocol.use_mobyturbo = false;
 	for (attempts=0;attempts<MAX_RETRIES;attempts++) {
 		bool stale_zrinit = false;
 
@@ -800,6 +821,12 @@ send_file(const char * name)
 	 	 * send the header and the data
 	 	 */
 
+		if (tx_mobyturbo_probe(&protocol) != 0) {
+			report_sender_protocol("can't send file header",
+			    ZMODEM_IO_ERROR);
+			(void)ZMODEM_PLAT_CLOSE(file_fd);
+			return SEND_FAILED;
+		}
 		if (tx_header(&protocol,zfile_frame) != 0) {
 			report_sender_protocol("can't send file header",
 			    ZMODEM_IO_ERROR);
@@ -843,6 +870,7 @@ send_file(const char * name)
 			return SEND_SKIPPED;
 		}
 		if (type == ZRPOS) {
+			select_zrpos_encoding();
 			break;
 		}
 	}
@@ -1003,6 +1031,8 @@ usage(void)
 	(void)printf("	-8          use ZedZap 8 KiB data subpackets\n");
 #endif
 	(void)printf("	-s          wait for an acknowledgement after each block\n");
+	(void)printf("	-m          offer Omen MobyTurbo on transparent links\n");
+	(void)printf("	-M          refuse Omen MobyTurbo\n");
 	(void)printf("	-wbytes     limit unacknowledged data (K and M suffixes allowed)\n");
 	(void)printf("	-n          transfer if source is newer\n");
 	(void)printf("	-o          overwrite if exists\n");
@@ -1042,6 +1072,7 @@ main(int argc,char ** argv)
 		for (option_index = 1U; argument[option_index] != '\0';
 		    option_index++) {
 			enum zmodem_plat_option_result platform_result;
+			int raw_option = (unsigned char)argument[option_index];
 			int option = toupper((unsigned char)argument[option_index]);
 
 			platform_result = zmodem_plat_parse_option(&plat_io,
@@ -1050,6 +1081,14 @@ main(int argc,char ** argv)
 				usage();
 			}
 			if (platform_result == ZMODEM_PLAT_OPTION_ACCEPTED) {
+				continue;
+			}
+			if (raw_option == 'm') {
+				opt_m = true;
+				continue;
+			}
+			if (raw_option == 'M') {
+				opt_M = true;
 				continue;
 			}
 

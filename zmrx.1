@@ -1,10 +1,10 @@
-.TH ZMRX 1 "August 24, 2026"
+.TH ZMRX 1 "August 30, 2026"
 .SH NAME
 zmrx \- receive file using ZMODEM protocol
 .SH SYNOPSIS
 .B zmrx
 [
-.B \-sebjnopdvq
+.B \-sebmMjnopdvq
 ] [
 .B \-l\fIline\fP
 ]
@@ -38,6 +38,16 @@ Request that the sender escape all control characters.
 Request Omen ZMODEM-90 seven-bit-safe transport.  The sender uses the
 0x31 header format, RLE, CRC32, and SO/ZDLE eighth-bit quoting.  This is the
 default in the CP/M build.
+.TP
+.B \-m
+Request Omen ZMODEM-90 MobyTurbo when the sender's active transparency probe
+arrives unchanged.  The mode uses CRC32 and normally escapes only ZDLE.  An
+offering sender may be accepted without this option; use
+.B \-M
+to refuse all MobyTurbo offers.
+.TP
+.B \-M
+Refuse Omen MobyTurbo.
 .TP
 .B \-l\fIline\fP
 File (typically a tty) to use for the transfer instead

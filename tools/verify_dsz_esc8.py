@@ -33,6 +33,22 @@ ROUTINES = (
      "0347a2d1f557516b4459e74c4defb11040b69af1eac241b701a00cfca7d9734a"),
 )
 
+# The whole-file digest above authenticates these MobyTurbo ranges.  They are
+# included in --disassemble output even though they do not need redundant
+# per-range digests to establish which executable was inspected.
+MOBYTURBO_RANGES = (
+    ("MobyTurbo -M option", 0x0A40, 0x0A50),
+    ("MobyTurbo -m option", 0x0B28, 0x0B38),
+    ("MobyTurbo offer and transparency probe", 0x5121, 0x5161),
+    ("MobyTurbo sender selection", 0x5450, 0x547F),
+    ("MobyTurbo receiver request", 0x6696, 0x66CD),
+    ("0x33 header encoder", 0x70DC, 0x71D4),
+    ("MobyTurbo data encoder", 0x761B, 0x7647),
+    ("MobyTurbo data receiver", 0x76D5, 0x7804),
+    ("0x33 header receiver", 0x7CC2, 0x8056),
+    ("MobyTurbo quoted-byte decoder", 0x850E, 0x8642),
+)
+
 
 def digest(data):
     return hashlib.sha256(data).hexdigest()
@@ -68,12 +84,19 @@ def main():
     print(f"header CRC suffix verified at load-image offset {suffix_start:#x}")
     for name, start, end, _ in ROUTINES:
         print(f"CS:{start:04x}-{end - 1:04x}  {name}")
+    for name, start, end in MOBYTURBO_RANGES:
+        print(f"CS:{start:04x}-{end - 1:04x}  {name}")
 
     if args.disassemble:
         ndisasm = shutil.which("ndisasm")
         if ndisasm is None:
             raise SystemExit("--disassemble requires ndisasm from NASM")
         for name, start, end, _ in ROUTINES:
+            print(f"\n;;; {name}, CS:{start:04x}-{end - 1:04x}")
+            subprocess.run(
+                [ndisasm, "-b", "16", f"-o{start:#x}", "-"],
+                input=image[start:end], check=True)
+        for name, start, end in MOBYTURBO_RANGES:
             print(f"\n;;; {name}, CS:{start:04x}-{end - 1:04x}")
             subprocess.run(
                 [ndisasm, "-b", "16", f"-o{start:#x}", "-"],

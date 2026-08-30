@@ -814,6 +814,196 @@ test_omen_rle_round_trip(void)
 }
 
 static bool
+test_mobyturbo_round_trip(void)
+
+{
+	static const uint8_t header[ZMOBY_ZRPOS_HEADER_LEN] = {
+		ZRPOS, XON, XOFF, ZDLE, UINT8_C(0x91), UINT8_C(0xff), 0U,
+		ZMOBY_REQUEST
+	};
+	static const uint8_t payload[] = {
+		XON, XOFF, UINT8_C(0x91), UINT8_C(0x93),
+		CAN, CAN, CAN, CAN, CAN, ZDLE, UINT8_C(0xff), 'Z'
+	};
+	struct zmodem sender;
+	struct zmodem receiver;
+	struct fake_io sending_io;
+	struct fake_io receiving_io;
+	uint8_t received[sizeof(payload)];
+	uint8_t frame_end;
+	size_t header_length;
+	size_t length;
+	bool passed;
+
+	initialize(&sender,&sending_io);
+	sender.use_mobyturbo = true;
+	passed = expect(tx_header_length(&sender,header,sizeof(header)) == 0,
+	    "transmit MobyTurbo extended header");
+	header_length = sending_io.output_length;
+	passed = expect(sending_io.output[0] == ZPAD,
+	    "MobyTurbo header pad") && passed;
+	passed = expect(sending_io.output[1] == ZDLE,
+	    "MobyTurbo header escape") && passed;
+	passed = expect(sending_io.output[2] == ZBINM32,
+	    "MobyTurbo header marker") && passed;
+	passed = expect(sending_io.output[3] == sizeof(header) - 1U,
+	    "MobyTurbo parameter count") && passed;
+	passed = expect(tx_data(&sender,ZCRCE,payload,sizeof(payload)) == 0,
+	    "transmit MobyTurbo data") && passed;
+	passed = expect(memchr(&sending_io.output[header_length],XON,
+	    sending_io.output_length - header_length) != NULL,
+	    "MobyTurbo leaves XON unescaped") && passed;
+	passed = expect(memchr(&sending_io.output[header_length],XOFF,
+	    sending_io.output_length - header_length) != NULL,
+	    "MobyTurbo leaves XOFF unescaped") && passed;
+
+	initialize(&receiver,&receiving_io);
+	(void)memcpy(receiving_io.input,sending_io.output,
+	    sending_io.output_length);
+	receiving_io.input_length = sending_io.output_length;
+	passed = expect(rx_header(&receiver,1000) == ZRPOS,
+	    "receive MobyTurbo header") && passed;
+	passed = expect(receiver.rxd_header_len == sizeof(header),
+	    "receive MobyTurbo extended length") && passed;
+	passed = expect(receiver.receive_mobyturbo,
+	    "MobyTurbo selects transparent decoder") && passed;
+	passed = expect(receiver.receive_32_bit_data,
+	    "MobyTurbo selects CRC32") && passed;
+	passed = expect(!receiver.receive_rle_data,
+	    "MobyTurbo disables RLE") && passed;
+	passed = expect(memcmp(receiver.rxd_header,header,sizeof(header)) == 0,
+	    "receive MobyTurbo header bytes") && passed;
+	passed = expect(rx_data(&receiver,received,sizeof(received),&length,
+	    &frame_end) == ENDOFFRAME,"receive MobyTurbo data") && passed;
+	passed = expect(length == sizeof(payload),
+	    "MobyTurbo data length") && passed;
+	passed = expect(frame_end == ZCRCE,
+	    "MobyTurbo data terminator") && passed;
+	passed = expect(memcmp(received,payload,sizeof(payload)) == 0,
+	    "MobyTurbo preserves flow control and CAN bytes") && passed;
+
+	initialize(&sender,&sending_io);
+	sender.use_mobyturbo = true;
+	sender.escape_all_control_characters = true;
+	sender.escape_iac = true;
+	passed = expect(tx_header_length(&sender,header,sizeof(header)) == 0,
+	    "transmit MobyTurbo header with requested escaping") && passed;
+	passed = expect(tx_data(&sender,ZCRCW,payload,sizeof(payload)) == 0,
+	    "transmit escaped MobyTurbo data") && passed;
+	initialize(&receiver,&receiving_io);
+	receiver.receive_escaped_control_characters = true;
+	(void)memcpy(receiving_io.input,sending_io.output,
+	    sending_io.output_length);
+	receiving_io.input_length = sending_io.output_length;
+	passed = expect(rx_header(&receiver,1000) == ZRPOS,
+	    "receive escaped MobyTurbo header") && passed;
+	passed = expect(rx_data(&receiver,received,sizeof(received),&length,
+	    &frame_end) == ENDOFFRAME,"receive escaped MobyTurbo data") && passed;
+	passed = expect(memcmp(received,payload,sizeof(payload)) == 0,
+	    "escaped MobyTurbo preserves payload") && passed;
+
+	initialize(&sender,&sending_io);
+	sender.use_mobyturbo = true;
+	passed = expect(tx_data(&sender,ZCRCE,
+	    (const uint8_t[]){ '@',CR },2U) == 0,
+	    "transmit MobyTurbo at-CR without ESCCTL") && passed;
+	initialize(&sender,&sending_io);
+	sender.use_mobyturbo = true;
+	sender.escape_all_control_characters = true;
+	passed = expect(tx_data(&sender,ZCRCE,
+	    (const uint8_t[]){ CR,'@','A','@',CR },5U) == 0,
+	    "transmit MobyTurbo CR escape predicates") && passed;
+
+	initialize(&sender,&sending_io);
+	sender.use_mobyturbo = true;
+	sending_io.write_result = ZMODEM_IO_ERROR;
+	passed = expect(tx_data(&sender,ZCRCE,payload,sizeof(payload)) != 0,
+	    "report MobyTurbo data write failure") && passed;
+	initialize(&sender,&sending_io);
+	sender.use_mobyturbo = true;
+	sending_io.flush_result = ZMODEM_IO_ERROR;
+	passed = expect(tx_data(&sender,ZCRCE,payload,sizeof(payload)) != 0,
+	    "report MobyTurbo data flush failure") && passed;
+	return passed;
+}
+
+static bool
+test_mobyturbo_probe(void)
+
+{
+	static const uint8_t header[HDRLEN] = { ZFILE,0U,0U,0U,0U };
+	struct zmodem sender;
+	struct zmodem receiver;
+	struct fake_io sending_io;
+	struct fake_io receiving_io;
+	size_t call;
+	bool passed;
+
+	initialize(&sender,&sending_io);
+	passed = expect(tx_mobyturbo_probe(&sender) == 0,
+	    "transmit MobyTurbo transparency probe");
+	passed = expect(tx_hex_header(&sender,header) == 0,
+	    "transmit header after MobyTurbo probe") && passed;
+	initialize(&receiver,&receiving_io);
+	(void)memcpy(receiving_io.input,sending_io.output,
+	    sending_io.output_length);
+	receiving_io.input_length = sending_io.output_length;
+	passed = expect(rx_header(&receiver,1000) == ZFILE,
+	    "scan header after MobyTurbo probe") && passed;
+	passed = expect(receiver.mobyturbo_probe_passed,
+	    "recognize intact MobyTurbo probe") && passed;
+
+	receiving_io.input_offset = 0U;
+	receiver.input_count = 0U;
+	receiver.input_index = 0U;
+	receiving_io.input[2] ^= UINT8_C(1);
+	passed = expect(rx_header(&receiver,1000) == ZFILE,
+	    "scan header after damaged MobyTurbo probe") && passed;
+	passed = expect(!receiver.mobyturbo_probe_passed,
+	    "reject damaged MobyTurbo probe") && passed;
+
+	for (call=1U;call<=5U;call++) {
+		initialize(&sender,&sending_io);
+		sending_io.fail_write_call = call;
+		passed = expect(tx_mobyturbo_probe(&sender) != 0,
+		    "report MobyTurbo probe write failure") && passed;
+	}
+	initialize(&sender,&sending_io);
+	passed = expect(tx_header_length(&sender,header,HDRLEN - 1U) != 0,
+	    "reject short transmitted header") && passed;
+	passed = expect(tx_header_length(&sender,header,ZMAXHLEN + 2U) != 0,
+	    "reject oversized transmitted header") && passed;
+
+	initialize(&receiver,&receiving_io);
+	receiving_io.input[0] = ZPAD;
+	receiving_io.input[1] = ZDLE;
+	receiving_io.input[2] = ZBINM32;
+	receiving_io.input[3] = HDRLEN - 2U;
+	receiving_io.input_length = 4U;
+	passed = expect(rx_header_and_check(&receiver,1000) == ZMODEM_TIMEOUT,
+	    "reject short MobyTurbo parameter count") && passed;
+	initialize(&receiver,&receiving_io);
+	receiving_io.input[0] = ZPAD;
+	receiving_io.input[1] = ZDLE;
+	receiving_io.input[2] = ZBINM32;
+	receiving_io.input[3] = ZMAXHLEN + 1U;
+	receiving_io.input_length = 4U;
+	passed = expect(rx_header_and_check(&receiver,1000) == ZMODEM_TIMEOUT,
+	    "reject oversized MobyTurbo parameter count") && passed;
+	initialize(&receiver,&receiving_io);
+	receiving_io.input[0] = ZPAD;
+	receiving_io.input[1] = ZDLE;
+	receiving_io.input[2] = ZBINM32;
+	receiving_io.input[3] = HDRLEN - 1U;
+	receiving_io.input[4] = ZDLE;
+	receiving_io.input[5] = '?';
+	receiving_io.input_length = 6U;
+	passed = expect(rx_header_and_check(&receiver,1000) == ZMODEM_TIMEOUT,
+	    "reject invalid MobyTurbo header escape") && passed;
+	return passed;
+}
+
+static bool
 test_omen_header_rejection(void)
 {
 	static const uint8_t header[HDRLEN] = { ZDATA,1U,2U,3U,4U };
@@ -1633,8 +1823,12 @@ test_extended_variable_header(void)
 {
 	static const uint8_t input[] =
 	    "**\030" "b1001000007af000000000000000000000000397e\r\212\021";
+	static const uint8_t header[ZMOBY_ZRPOS_HEADER_LEN] = {
+		ZRPOS,0U,0U,0U,0U,0U,0U,0U
+	};
 	struct zmodem protocol;
 	struct fake_io fake;
+	unsigned crc32;
 	bool passed;
 
 	initialize(&protocol,&fake);
@@ -1646,6 +1840,23 @@ test_extended_variable_header(void)
 	    "maximum variable header length") && passed;
 	passed = expect(protocol.rxd_header[4] == UINT8_C(0xaf),
 	    "extended variable header contents") && passed;
+	for (crc32=0U;crc32<2U;crc32++) {
+		struct zmodem receiver;
+		struct fake_io receiving_io;
+
+		initialize(&protocol,&fake);
+		protocol.can_fcs_32 = true;
+		protocol.want_fcs_32 = crc32 != 0U;
+		passed = expect(tx_header_length(&protocol,header,sizeof(header)) == 0,
+		    "transmit extended binary header") && passed;
+		initialize(&receiver,&receiving_io);
+		(void)memcpy(receiving_io.input,fake.output,fake.output_length);
+		receiving_io.input_length = fake.output_length;
+		passed = expect(rx_header(&receiver,1000) == ZRPOS,
+		    "receive extended binary header") && passed;
+		passed = expect(receiver.rxd_header_len == sizeof(header),
+		    "extended binary header length") && passed;
+	}
 	return passed;
 }
 
@@ -1746,6 +1957,10 @@ transmit_header_style(struct zmodem * protocol,const uint8_t * header,
 		protocol->escape_8th_bit = true;
 		return tx_header(protocol,header);
 	}
+	if (style == 4U) {
+		protocol->use_mobyturbo = true;
+		return tx_header(protocol,header);
+	}
 	protocol->can_fcs_32 = true;
 	protocol->want_fcs_32 = style == 2U;
 	return tx_header(protocol,header);
@@ -1761,7 +1976,7 @@ test_header_write_failures(void)
 	unsigned variable_value;
 	bool passed = true;
 
-	for (style = 0U; style < 4U; style++) {
+	for (style = 0U; style < 5U; style++) {
 		for (variable_value = 0U; variable_value < 2U; variable_value++) {
 			if (style == 3U && variable_value != 0U) {
 				continue;
@@ -1803,6 +2018,7 @@ test_header_read_failures(void)
 	passed = test_header_read_sweep(0U) && passed;
 	passed = test_header_read_sweep(1U) && passed;
 	passed = test_header_read_sweep(2U) && passed;
+	passed = test_header_read_sweep(4U) && passed;
 	passed = test_reject_frame_end_in_header_body() && passed;
 	passed = test_reject_frame_end_in_header_crc(false) && passed;
 	passed = test_reject_frame_end_in_header_crc(true) && passed;
@@ -1863,9 +2079,13 @@ test_header_read_failures(void)
 	passed = expect(fake.output_length > 0U,
 	    "invalid hex digit sends ZNAK") && passed;
 
-	for (index = 1U; index <= 2U; index++) {
+	for (index = 1U; index <= 4U; index++) {
 		struct zmodem sender;
 		struct fake_io sending_io;
+
+		if (index == 3U) {
+			continue;
+		}
 
 		initialize(&sender,&sending_io);
 		passed = expect(transmit_header_style(&sender,
@@ -1906,6 +2126,8 @@ test_header_variants(void)
 	passed = test_variable_header_rejection() && passed;
 	passed = test_omen_header_round_trip() && passed;
 	passed = test_omen_header_rejection() && passed;
+	passed = test_mobyturbo_round_trip() && passed;
+	passed = test_mobyturbo_probe() && passed;
 	initialize(&protocol,&fake);
 	protocol.use_variable_headers = true;
 	passed = expect(tx_hex_header(&protocol,header) == 0,

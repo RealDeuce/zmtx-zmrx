@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Manual DSZ.EXE ESC8 interoperability check; DSZ is not redistributed."""
+"""Manual DSZ.EXE ESC8/MobyTurbo check; DSZ is not redistributed."""
 
 import argparse
 import os
@@ -54,8 +54,8 @@ def relay(peer, native, from_dos, from_native):
                 peer.sendall(data)
 
 
-def transfer(dosbox, dsz, dsz_sender):
-    label = "DSZ sender" if dsz_sender else "DSZ receiver"
+def transfer(dosbox, dsz, dsz_sender, option, mode):
+    label = f"DSZ {'sender' if dsz_sender else 'receiver'} {mode}"
     with tempfile.TemporaryDirectory(prefix="zmodem-dsz-") as temporary:
         base = Path(temporary)
         dos_drive = base / "dos"
@@ -67,7 +67,7 @@ def transfer(dosbox, dsz, dsz_sender):
         destination = native_drive if dsz_sender else dos_drive
         (source / "payload.bin").write_bytes(PAYLOAD)
 
-        action = "sz -E PAYLOAD.BIN" if dsz_sender else "rz -E"
+        action = f"sz {option} PAYLOAD.BIN" if dsz_sender else f"rz {option}"
         batch = (
             "@echo off\r\n"
             f"DSZ.EXE port 1 speed 9600 handshake off d {action}\r\n"
@@ -102,8 +102,10 @@ def transfer(dosbox, dsz, dsz_sender):
         from_native = bytearray()
         try:
             peer = test_dos.connect(port, dos)
+            native_option = "-bv" if mode == "ESC8" and dsz_sender else \
+                "-mv" if mode == "MobyTurbo" else "-v"
             command = [str(ROOT / ("zmrx" if dsz_sender else "zmtx")),
-                       "-bv" if dsz_sender else "-v"]
+                       native_option]
             if not dsz_sender:
                 command.append("payload.bin")
             native = subprocess.Popen(
@@ -138,7 +140,7 @@ def transfer(dosbox, dsz, dsz_sender):
                 f"{dos_output}")
         if test_dos.find_received(destination).read_bytes() != PAYLOAD:
             raise RuntimeError(f"{label} did not preserve the payload")
-        print(f"{label} ESC8 transfer passed")
+        print(f"{label} transfer passed")
 
 
 def main():
@@ -153,8 +155,11 @@ def main():
          str(args.dsz)], check=True)
     if shutil.which(args.dosbox) is None:
         raise SystemExit(f"DOSBox not found: {args.dosbox}")
-    transfer(args.dosbox, args.dsz, dsz_sender=True)
-    transfer(args.dosbox, args.dsz, dsz_sender=False)
+    for option, mode in (("-E", "ESC8"), ("-m", "MobyTurbo")):
+        transfer(args.dosbox, args.dsz, dsz_sender=True,
+                 option=option, mode=mode)
+        transfer(args.dosbox, args.dsz, dsz_sender=False,
+                 option=option, mode=mode)
 
 
 if __name__ == "__main__":

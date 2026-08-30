@@ -931,6 +931,33 @@ Long runs are split at 63 bytes. Standard `ZBINR32` uses the same RLE token
 grammar and CRC32 calculation with ordinary ZDLE quoting instead of the
 seven-bit layer.
 
+### MobyTurbo transparent framing
+
+Omen's MobyTurbo is a negotiated ZMODEM-90 mode for a fully transparent
+connection. There is no equivalent standard mode: the ordinary receive
+grammar discards raw XON/XOFF bytes, while `ESCCTL` requests more quoting and
+cannot request less.
+
+Before `ZFILE`, a Moby-capable sender emits the raw transparency probe
+`23 c1 d4 93 11`. The sender offers MobyTurbo by setting bit `0x04` in
+`ZFILE.ZF3`; a receiver may also request it locally. Only a receiver which saw
+the complete probe unchanged requests the mode. Its `ZRPOS` is a variable
+seven-parameter header: parameters four and five are zero and bit `0x01` of
+parameter six requests MobyTurbo. The sender changes modes only after that
+request, so the `ZFILE` header and metadata retain ordinary framing.
+
+A MobyTurbo header begins `ZPAD ZDLE 0x33`, followed by the unoffset parameter
+count, the frame type and parameters, and little-endian CRC32. As with Omen's
+`0x31` header, the CRC covers the header followed by the literal copyright
+string above. Header bytes use MobyTurbo quoting.
+
+MobyTurbo data is not compressed. Every byte except `ZDLE` is sent literally;
+`ZDLE` retains its normal `ZDLE ZDLEE` representation. A data-subpacket end is
+`ZDLE` plus its `ZCRC*` code, followed by little-endian CRC32 over the original
+data and that code. Implementations may still apply requested `ESCCTL` or
+transport-specific IAC quoting, which is valid but reduces the overhead
+benefit.
+
 ## Constants
 
 ### ASCII control characters
@@ -962,6 +989,7 @@ seven-bit layer.
 | `ZBIN32` | `0x43` | Binary frame indicator (CRC32) |
 | `ZBINR32` | `0x44` | Run Length encoded binary frame (CRC32) |
 | `ZBINR32ESC8` | `0x31` | Omen RLE, CRC32, and seven-bit-safe eighth-bit quoting |
+| `ZBINM32` | `0x33` | Omen MobyTurbo transparent CRC32 framing |
 | `ZVBIN` | `0x61` | Binary frame indicator (CRC16) |
 | `ZVHEX` | `0x62` | Hex frame indicator |
 | `ZVBIN32` | `0x63` | Binary frame indicator (CRC32) |

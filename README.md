@@ -170,6 +170,15 @@ for compatibility with implementations such as Qodem. See the
 [DSZ disassembly evidence](docs/omen-esc8-disassembly.md) for the recovered
 wire format and reproducible binary verification.
 
+`zmtx -m` offers Omen's MobyTurbo extension and `zmrx -m` requests it.
+MobyTurbo uses CRC32 while escaping only `ZDLE` on a transparent connection,
+so bytes normally quoted or discarded as software flow control travel without
+expansion. The peers first exchange Omen's active transparency probe and use
+the mode only when the five probe bytes arrive unchanged. `-M` explicitly
+refuses the extension. MobyTurbo is never selected by default unless the peer
+offers it, and ordinary ZMODEM has no equivalent negotiation: standard
+receivers unconditionally discard raw XON and XOFF bytes.
+
 `zmtx -w32K` limits transmitted but unacknowledged data to a fixed 32 KiB
 window. Values are byte counts with an optional binary `K` or `M` suffix. A
 window must contain at least four selected maximum-size subpackets, and cannot

@@ -71,6 +71,8 @@ static bool opt_v = false;				/* show progress output */
 static bool opt_d = false;				/* show debug output */
 static bool opt_q = false;
 static bool opt_s = ZMODEM_PLAT_DEFAULT_NONSTREAMING;
+static bool opt_m = false;
+static bool opt_M = false;
 static bool opt_escape_control = false;
 static bool opt_escape_8th_bit = ZMODEM_PLAT_DEFAULT_ESCAPE_8TH_BIT;
 static bool junk_pathnames = ZMODEM_PLAT_DEFAULT_JUNK_PATHNAMES;	/* junk incoming path names or keep them */
@@ -82,6 +84,7 @@ static bool current_file_size_known;
 static ZMODEM_PLAT_TIMESPEC transfer_start;
 static bool transfer_clock_started;
 static bool receive_error_reported;
+static bool current_mobyturbo;
 
 static void
 report_receiver_errno(const char * operation,const char * name,int error)
@@ -202,6 +205,20 @@ terminal_receive_result(int result)
 	return result <= ZMODEM_CANCELLED;
 }
 
+static int
+tx_zrpos(uint32_t position)
+
+{
+	uint8_t header[ZMOBY_ZRPOS_HEADER_LEN] = { ZRPOS, 0, 0, 0, 0, 0, 0, 0 };
+
+	zmodem_set_header_position(header,position);
+	if (!current_mobyturbo) {
+		return tx_header(&protocol,header);
+	}
+	header[ZMOBY_ZRPOS_FLAGS] = ZMOBY_REQUEST;
+	return tx_header_length(&protocol,header,sizeof(header));
+}
+
 /*
  * receive a header and check for garbage
  */
@@ -228,7 +245,7 @@ receive_file_data(char * name,FILE * fp)
 		report_receiver_errno("can't determine file position for",name,error);
 		return ZFERR;
 	}
-	if (tx_pos_header(&protocol,ZRPOS,pos) != 0) {
+	if (tx_zrpos(pos) != 0) {
 		report_receiver_protocol("can't request file data",
 		    ZMODEM_IO_ERROR);
 		return ZFERR;
@@ -241,7 +258,7 @@ receive_file_data(char * name,FILE * fp)
 			if (errors >= MAX_RETRIES) {
 				return TIMEOUT;
 			}
-			if (tx_pos_header(&protocol,ZRPOS,pos) != 0) {
+			if (tx_zrpos(pos) != 0) {
 				report_receiver_protocol("can't retry file data",
 				    ZMODEM_IO_ERROR);
 				return TIMEOUT;
@@ -262,7 +279,7 @@ receive_file_data(char * name,FILE * fp)
 			if (terminal_receive_result(data_result)) {
 				return data_result;
 			}
-			if (tx_pos_header(&protocol,ZRPOS,pos) != 0) {
+			if (tx_zrpos(pos) != 0) {
 				report_receiver_protocol("can't resume file data",
 				    ZMODEM_IO_ERROR);
 				return ZFERR;
@@ -282,7 +299,7 @@ receive_file_data(char * name,FILE * fp)
 			if (errors >= MAX_RETRIES) {
 				return INVDATA;
 			}
-			if (tx_pos_header(&protocol,ZRPOS,pos) != 0) {
+			if (tx_zrpos(pos) != 0) {
 				report_receiver_protocol("can't request corrected file position",
 				    ZMODEM_IO_ERROR);
 				return INVDATA;
@@ -311,7 +328,7 @@ receive_file_data(char * name,FILE * fp)
 					if (errors >= MAX_RETRIES) {
 						return type;
 					}
-					if (tx_pos_header(&protocol,ZRPOS,pos) != 0) {
+					if (tx_zrpos(pos) != 0) {
 						report_receiver_protocol(
 						    "can't request retransmission",
 						    ZMODEM_IO_ERROR);
@@ -383,7 +400,7 @@ tx_zrinit(void)
 {
 	unsigned receive_buffer_size = ZMODEM_PLAT_RECEIVE_BUFFER_SIZE(&plat_io);
 	uint8_t zrinit_header[] = {
-		ZRINIT, 0, 0, 0, ZF0_CANBRK | ZF0_CANFDX | ZF0_CANOVIO |
+		ZRINIT, 0, 0, ZF1_CANVHDR, ZF0_CANBRK | ZF0_CANFDX | ZF0_CANOVIO |
 		    ZF0_CANRLE | ZF0_CANFC32
 	};
 
@@ -514,6 +531,12 @@ receive_file(void)
 	bool management_selected = false;
 
 	receive_error_reported = false;
+	current_mobyturbo = !opt_M && protocol.mobyturbo_probe_passed &&
+	    (opt_m || (protocol.rxd_header[ZF3] & ZF3_ZMOBY) != 0U);
+	if (opt_d && (opt_m || (protocol.rxd_header[ZF3] & ZF3_ZMOBY) != 0U)) {
+		(void)fprintf(stderr,"zmrx: MobyTurbo %s\n",
+		    current_mobyturbo ? "selected" : "transparency probe failed");
+	}
 
 	mdate_known = false;
 	current_file_size = 0;
@@ -908,6 +931,8 @@ usage(void)
 	(void)printf("	-s          request non-streaming transfers\n");
 	(void)printf("	-e          request control-character escaping\n");
 	(void)printf("	-b          request high-bit-byte escaping\n");
+	(void)printf("	-m          request Omen MobyTurbo on transparent links\n");
+	(void)printf("	-M          refuse Omen MobyTurbo\n");
 	(void)printf("	(only one of -n -o or -p may be specified)\n");
 	zmodem_plat_usage(ZMODEM_PLAT_ZMRX);
 
@@ -940,6 +965,7 @@ main(int argc,char ** argv)
 		for (option_index = 1U; argument[option_index] != '\0';
 		    option_index++) {
 			enum zmodem_plat_option_result platform_result;
+			int raw_option = (unsigned char)argument[option_index];
 			int option = toupper((unsigned char)argument[option_index]);
 
 			platform_result = zmodem_plat_parse_option(&plat_io,
@@ -948,6 +974,14 @@ main(int argc,char ** argv)
 				usage();
 			}
 			if (platform_result == ZMODEM_PLAT_OPTION_ACCEPTED) {
+				continue;
+			}
+			if (raw_option == 'm') {
+				opt_m = true;
+				continue;
+			}
+			if (raw_option == 'M') {
+				opt_M = true;
 				continue;
 			}
 

@@ -1,10 +1,10 @@
-.TH ZMTX 1 "August 24, 2026"
+.TH ZMTX 1 "August 30, 2026"
 .SH NAME
 zmtx \- transmit file using ZMODEM protocol
 .SH SYNOPSIS
 .B zmtx
 [
-.B \-48snopdv
+.B \-48smMnopdv
 ] [
 .B \-l\fIline\fP
 ] [
@@ -42,6 +42,17 @@ size; large files use additional subpackets.
 Disable streaming and wait for a committed-position acknowledgement after
 every data subpacket.  This mode is also selected automatically when the
 receiver does not advertise overlapped I/O capability.
+.TP
+.B \-m
+Offer Omen ZMODEM-90 MobyTurbo.  If the receiver observes the active
+transparency probe unchanged and requests the mode, CRC32 data is sent while
+only ZDLE is necessarily escaped.  A receiver may request the mode without
+this option; use
+.B \-M
+to refuse all MobyTurbo requests.
+.TP
+.B \-M
+Refuse Omen MobyTurbo.
 .TP
 .B \-w\fIbytes\fP
 Limit the amount of transmitted but unacknowledged file data.  The value is

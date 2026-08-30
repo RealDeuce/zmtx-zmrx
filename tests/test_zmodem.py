@@ -26,6 +26,7 @@ ZBIN = 0x41
 ZHEX = 0x42
 ZBIN32 = 0x43
 ZBINR32ESC8 = 0x31
+ZBINM32 = 0x33
 ZVBIN = 0x61
 ZVHEX = 0x62
 ZVBIN32 = 0x63
@@ -55,6 +56,7 @@ ZCRCQ = 0x6A
 ZCRCW = 0x6B
 ESCAPE_BYTES = {ZDLE, 0x10, 0x90, XON, 0x91, 0x13, 0x93}
 OMEN_HEADER_CRC_SUFFIX = b"Copyright 1989 Omen Technology INC All Rights Reserved"
+MOBYTURBO_PROBE = bytes((0x23, 0xC1, 0xD4, 0x93, 0x11))
 FILE_WRITE_LIMIT = 16 * 1024 * 1024
 
 
@@ -96,6 +98,13 @@ def hex_header(frame_type, position=0, *, header=None, parity=False):
     return wire
 
 
+def variable_hex_header(header):
+    check = crc16(header)
+    return b"**\x18b" + f"{len(header) - 1:02x}".encode("ascii") + \
+        header.hex().encode("ascii") + \
+        check.to_bytes(2, "big").hex().encode("ascii") + b"\r\n"
+
+
 def data_subpacket(data, frame_end):
     check = crc16(data + bytes((frame_end,)))
     wire = escaped(data) + bytes((ZDLE, frame_end)) + escaped(check.to_bytes(2, "big"))
@@ -119,6 +128,27 @@ def data_subpacket32(data, frame_end):
     return wire
 
 
+def mobyturbo_escaped(values):
+    return bytes(value for byte in values
+                 for value in ((ZDLE, byte ^ 0x40)
+                               if byte == ZDLE else (byte,)))
+
+
+def mobyturbo_header(header):
+    check = zlib.crc32(header + OMEN_HEADER_CRC_SUFFIX) & 0xFFFFFFFF
+    return bytes((ZPAD, ZDLE, ZBINM32, len(header) - 1)) + \
+        mobyturbo_escaped(header + check.to_bytes(4, "little"))
+
+
+def mobyturbo_data(data, frame_end):
+    check = zlib.crc32(data + bytes((frame_end,))) & 0xFFFFFFFF
+    wire = mobyturbo_escaped(data) + bytes((ZDLE, frame_end)) + \
+        mobyturbo_escaped(check.to_bytes(4, "little"))
+    if frame_end == ZCRCW:
+        wire += bytes((XON,))
+    return wire
+
+
 class Peer:
     def __init__(self, sock):
         self.sock = sock
@@ -126,6 +156,7 @@ class Peer:
         self.buffer = bytearray()
         self.use_crc32 = False
         self.use_omen = False
+        self.use_mobyturbo = False
         self.require_escaped_controls = False
 
     def send(self, data):
@@ -184,11 +215,54 @@ class Peer:
             expected = zlib.crc32(header + OMEN_HEADER_CRC_SUFFIX) & 0xFFFFFFFF
             if expected != int.from_bytes(raw[length:], "little"):
                 raise AssertionError("bad CRC in received Omen ESC8 header")
+        elif style == ZBINM32:
+            length = self._mobyturbo_byte() + 1
+            if not 5 <= length <= 17:
+                raise AssertionError("bad MobyTurbo header length")
+            raw = bytes(self._mobyturbo_byte() for _ in range(length + 4))
+            header = raw[:length]
+            expected = zlib.crc32(header + OMEN_HEADER_CRC_SUFFIX) & 0xFFFFFFFF
+            if expected != int.from_bytes(raw[length:], "little"):
+                raise AssertionError("bad CRC in received MobyTurbo header")
         else:
             raise AssertionError(f"unexpected header style {style:#x}")
-        self.use_crc32 = style in (ZBIN32, ZVBIN32, ZBINR32ESC8)
+        self.use_crc32 = style in (ZBIN32, ZVBIN32, ZBINR32ESC8, ZBINM32)
         self.use_omen = style == ZBINR32ESC8
+        self.use_mobyturbo = style == ZBINM32
         return header[0], int.from_bytes(header[1:], "little"), header
+
+    def _mobyturbo_byte(self, *, allow_frame_end=False):
+        value = self.byte()
+        if value != ZDLE:
+            return value
+        value = self.byte()
+        if allow_frame_end and value in (ZCRCE, ZCRCG, ZCRCQ, ZCRCW):
+            return value + 0x100
+        if value == 0x6C:
+            return 0x7F
+        if value == 0x6D:
+            return 0xFF
+        if value & 0x60 == 0x40:
+            return value ^ 0x40
+        raise AssertionError(f"unexpected MobyTurbo ZDLE sequence {value:#x}")
+
+    def _mobyturbo_data(self):
+        payload = bytearray()
+        while True:
+            value = self._mobyturbo_byte(allow_frame_end=True)
+            if value > 0xFF:
+                frame_end = value & 0xFF
+                break
+            payload.append(value)
+        received_crc = int.from_bytes(
+            bytes(self._mobyturbo_byte() for _ in range(4)), "little")
+        expected_crc = zlib.crc32(payload + bytes((frame_end,))) & 0xFFFFFFFF
+        if received_crc != expected_crc:
+            raise AssertionError(
+                f"bad MobyTurbo data CRC: {received_crc:#x} != {expected_crc:#x}")
+        if frame_end == ZCRCW and self.byte() != XON:
+            raise AssertionError("missing XON after MobyTurbo ZCRCW subpacket")
+        return bytes(payload), frame_end
 
     def _omen_byte(self, *, allow_frame_end=False):
         high = False
@@ -286,6 +360,8 @@ class Peer:
     def data(self, *, require_escaped_8th=False):
         if self.use_omen:
             return self._omen_data()
+        if self.use_mobyturbo:
+            return self._mobyturbo_data()
         payload = bytearray()
         while True:
             value = self.byte()
@@ -462,6 +538,183 @@ class ZmodemTests(unittest.TestCase):
             bytes((index * 37 + size) & 0xFF for index in range(size))
             for size in sizes
         ])
+
+    def test_sender_uses_negotiated_mobyturbo(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            payload = bytes((XON, 0x13, 0x91, 0x93, ZDLE, 0xFF)) + \
+                bytes((ZDLE,)) * 5 + b"MobyTurbo"
+            source = Path(temporary) / "moby.bin"
+            source.write_bytes(payload)
+            process, peer, zrinit = self.begin_sender(
+                temporary, source.name, "-m", "-d", flags=0x23, zf1=1)
+            try:
+                peer.send(variable_hex_header(
+                    bytes((ZRPOS, 0, 0, 0, 0, 0, 0, 1))))
+                frame_type, position, _ = peer.header()
+                self.assertEqual((frame_type, position), (ZDATA, 0))
+                received, frame_end = peer.data()
+                self.assertEqual((received, frame_end), (payload, ZCRCE))
+                stderr = self.finish_sender(peer, process, zrinit,
+                                            len(payload))
+                self.assertIn(b"selected MobyTurbo", stderr)
+            finally:
+                peer.sock.close()
+                if process.poll() is None:
+                    process.kill()
+                    process.wait()
+
+    def test_receiver_requests_and_decodes_mobyturbo(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            payload = bytes((XON, 0x13, 0x91, 0x93, ZDLE, 0xFF)) + \
+                bytes((0x18,)) * 5 + b"transparent"
+            process, peer = self.start_receiver(temporary, "-m", "-d")
+            try:
+                self.assertTrue(peer.initial_header[3] & 1)
+                info = b"moby.bin\0" + \
+                    f"{len(payload)} 0 0 0 1 0\0".encode("ascii")
+                zfile = bytes((ZFILE, 0x04, 0, 0, 0))
+                peer.send(MOBYTURBO_PROBE + hex_header(ZFILE, header=zfile) +
+                          data_subpacket(info, ZCRCW))
+                frame_type, _, header = peer.header()
+                self.assertEqual(frame_type, ZRPOS)
+                self.assertEqual(len(header), 8)
+                self.assertEqual(header[1:5], b"\0\0\0\0")
+                self.assertEqual(header[7] & 1, 1)
+                peer.send(mobyturbo_header(bytes((ZDATA, 0, 0, 0, 0))) +
+                          mobyturbo_data(payload, ZCRCE) +
+                          mobyturbo_header(bytes((ZEOF,)) +
+                                           len(payload).to_bytes(4, "little")))
+                frame_type, _, _ = peer.header()
+                self.assertEqual(frame_type, ZRINIT)
+                returncode, stderr = finish_receiver(peer, process)
+                self.assertEqual(returncode, 0,
+                                 stderr.decode(errors="replace"))
+                self.assertIn(b"MobyTurbo selected", stderr)
+                self.assertEqual((Path(temporary) / "moby.bin").read_bytes(),
+                                 payload)
+            finally:
+                peer.sock.close()
+                if process.poll() is None:
+                    process.kill()
+                    process.wait()
+
+    def test_sender_can_veto_mobyturbo(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            source = Path(temporary) / "standard.bin"
+            source.write_bytes(b"standard framing")
+            process, peer, zrinit = self.begin_sender(
+                temporary, source.name, "-m", "-M", flags=0x23, zf1=1)
+            try:
+                peer.send(variable_hex_header(
+                    bytes((ZRPOS, 0, 0, 0, 0, 0, 0, 1))))
+                frame_type, position, _ = peer.header()
+                self.assertEqual((frame_type, position), (ZDATA, 0))
+                self.assertFalse(peer.use_mobyturbo)
+                payload, frame_end = peer.data()
+                self.assertEqual((payload, frame_end),
+                                 (b"standard framing", ZCRCE))
+                self.finish_sender(peer, process, zrinit, len(payload))
+            finally:
+                peer.sock.close()
+                if process.poll() is None:
+                    process.kill()
+                    process.wait()
+
+    def test_sender_requires_mobyturbo_zrpos_flag(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            source = Path(temporary) / "standard.bin"
+            source.write_bytes(b"no Moby flag")
+            process, peer, zrinit = self.begin_sender(
+                temporary, source.name, flags=0x23, zf1=1)
+            try:
+                peer.send(variable_hex_header(
+                    bytes((ZRPOS, 0, 0, 0, 0, 0, 0, 0))))
+                frame_type, position, _ = peer.header()
+                self.assertEqual((frame_type, position), (ZDATA, 0))
+                self.assertFalse(peer.use_mobyturbo)
+                payload, frame_end = peer.data()
+                self.assertEqual((payload, frame_end),
+                                 (b"no Moby flag", ZCRCE))
+                self.finish_sender(peer, process, zrinit, len(payload))
+            finally:
+                peer.sock.close()
+                if process.poll() is None:
+                    process.kill()
+                    process.wait()
+
+    def test_sender_does_not_combine_mobyturbo_and_escape8(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            payload = bytes((0x80, XON, ZDLE, 0xFF))
+            source = Path(temporary) / "escape8.bin"
+            source.write_bytes(payload)
+            process, peer, zrinit = self.begin_sender(
+                temporary, source.name, "-m", flags=0xA3, zf1=1)
+            try:
+                peer.send(variable_hex_header(
+                    bytes((ZRPOS, 0, 0, 0, 0, 0, 0, 1))))
+                frame_type, position, _ = peer.header()
+                self.assertEqual((frame_type, position), (ZDATA, 0))
+                self.assertTrue(peer.use_omen)
+                self.assertFalse(peer.use_mobyturbo)
+                received, frame_end = peer.data()
+                self.assertEqual((received, frame_end), (payload, ZCRCE))
+                self.finish_sender(peer, process, zrinit, len(payload))
+            finally:
+                peer.sock.close()
+                if process.poll() is None:
+                    process.kill()
+                    process.wait()
+
+    def test_receiver_can_veto_mobyturbo(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            process, peer = self.start_receiver(temporary, "-M")
+            try:
+                info = b"standard.bin\0" + b"0 0 0 0 1 0\0"
+                zfile = bytes((ZFILE, 0x04, 0, 0, 0))
+                peer.send(MOBYTURBO_PROBE + hex_header(ZFILE, header=zfile) +
+                          data_subpacket(info, ZCRCW))
+                frame_type, position, header = peer.header()
+                self.assertEqual((frame_type, position), (ZRPOS, 0))
+                self.assertEqual(len(header), 5)
+                peer.send(hex_header(ZDATA) + data_subpacket(b"", ZCRCE) +
+                          hex_header(ZEOF, 0))
+                frame_type, _, _ = peer.header()
+                self.assertEqual(frame_type, ZRINIT)
+                returncode, stderr = finish_receiver(peer, process)
+                self.assertEqual(returncode, 0,
+                                 stderr.decode(errors="replace"))
+            finally:
+                peer.sock.close()
+                if process.poll() is None:
+                    process.kill()
+                    process.wait()
+
+    def test_receiver_accepts_offered_mobyturbo_by_default(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            process, peer = self.start_receiver(temporary, "-d")
+            try:
+                info = b"offered.bin\0" + b"0 0 0 0 1 0\0"
+                zfile = bytes((ZFILE, 0x04, 0, 0, 0))
+                peer.send(MOBYTURBO_PROBE + hex_header(ZFILE, header=zfile) +
+                          data_subpacket(info, ZCRCW))
+                frame_type, _, header = peer.header()
+                self.assertEqual(frame_type, ZRPOS)
+                self.assertEqual(len(header), 8)
+                self.assertEqual(header[7] & 1, 1)
+                peer.send(mobyturbo_header(bytes((ZDATA, 0, 0, 0, 0))) +
+                          mobyturbo_data(b"", ZCRCE) +
+                          mobyturbo_header(bytes((ZEOF, 0, 0, 0, 0))))
+                frame_type, _, _ = peer.header()
+                self.assertEqual(frame_type, ZRINIT)
+                returncode, stderr = finish_receiver(peer, process)
+                self.assertEqual(returncode, 0,
+                                 stderr.decode(errors="replace"))
+                self.assertIn(b"MobyTurbo selected", stderr)
+            finally:
+                peer.sock.close()
+                if process.poll() is None:
+                    process.kill()
+                    process.wait()
 
     def test_sender_reports_progress_for_empty_file(self):
         with tempfile.TemporaryDirectory() as temporary:
