@@ -13,7 +13,14 @@
 #include "zmdm.h"
 #include "zmodem_cpm_driver.h"
 
-static int tracked_fd = -1;
+/*
+ * Z88DK's CP/M file descriptor is an FCB address stored in an int.  Once the
+ * program grows past 32 KiB, a valid address can therefore compare negative
+ * on a 16-bit implementation.  Expose a small POSIX-like descriptor to the
+ * frontend and retain the native bit pattern only inside this adapter.
+ */
+#define ZMODEM_CPM_FILE_FD 3
+static int tracked_native_fd = -1;
 static const char * tracked_path;
 
 static void
@@ -75,41 +82,54 @@ zmodem_cpm_open(const char * path,int flags,mode_t mode)
 	}
 	errno = 0;
 	fd = open(path,native_flags,mode);
-	if (fd >= 0) {
-		tracked_fd = fd;
+	if (fd != -1) {
+		tracked_native_fd = fd;
 		tracked_path = path;
+		return ZMODEM_CPM_FILE_FD;
 	}
-	return fd;
+	return -1;
 }
 
 int
 zmodem_cpm_close(int fd)
 {
-	int result = close(fd);
+	int result;
 
-	if (fd == tracked_fd) {
-		tracked_fd = -1;
-		tracked_path = NULL;
+	if (fd != ZMODEM_CPM_FILE_FD || tracked_native_fd == -1) {
+		errno = EBADF;
+		return -1;
 	}
+	result = close(tracked_native_fd);
+	tracked_native_fd = -1;
+	tracked_path = NULL;
 	return result;
 }
 
 ssize_t
 zmodem_cpm_read(int fd,void * buffer,size_t length)
 {
-	return read(fd,buffer,length);
+	if (fd != ZMODEM_CPM_FILE_FD || tracked_native_fd == -1) {
+		errno = EBADF;
+		return -1;
+	}
+	return read(tracked_native_fd,buffer,length);
 }
 
 long
 zmodem_cpm_lseek(int fd,long offset,int origin)
 {
-	return lseek(fd,offset,origin);
+	if (fd != ZMODEM_CPM_FILE_FD || tracked_native_fd == -1) {
+		errno = EBADF;
+		return -1L;
+	}
+	return lseek(tracked_native_fd,offset,origin);
 }
 
 int
 zmodem_cpm_fstat(int fd,struct stat * status)
 {
-	if (fd != tracked_fd || tracked_path == NULL) {
+	if (fd != ZMODEM_CPM_FILE_FD || tracked_native_fd == -1 ||
+	    tracked_path == NULL) {
 		errno = EBADF;
 		return -1;
 	}
@@ -119,7 +139,11 @@ zmodem_cpm_fstat(int fd,struct stat * status)
 FILE *
 zmodem_cpm_fdopen(int fd,const char * mode)
 {
-	return fdopen(fd,mode);
+	if (fd != ZMODEM_CPM_FILE_FD || tracked_native_fd == -1) {
+		errno = EBADF;
+		return NULL;
+	}
+	return fdopen(tracked_native_fd,mode);
 }
 
 long
