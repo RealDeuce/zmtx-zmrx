@@ -47,7 +47,11 @@ AwaitAck -left-> Retry : ZRPOS, ZNAK, timeout,\nor invalid ACK position
 
 state "Reduce block and retry" as Retry
 Retry : use new offset when ZRPOS supplied
+Retry : observe emitted offset for ZNAK or timeout
+Retry : new receiver or emitted high-water position / reset attempts
+Retry : no new high-water position / increment attempts
 Retry : reduce current subpacket size
+Retry : end first retransmitted subpacket with ZCRCW and wait
 Retry -left-> Position : file attempts remain
 
 state "Finish file" as EndFile
@@ -70,6 +74,8 @@ end note
 note bottom of Retry
   ZRPOS supplies a new offset. ZNAK and timeout use the
   last receiver-requested offset retained by send_file().
+  Their emitted offset is used only for retry accounting. Receiver
+  and emitted high-water marks remain separate until ZRPOS advances.
 end note
 
 legend bottom

@@ -136,6 +136,38 @@ file_position(int file_fd,ZMODEM_PLAT_OFF_T * position)
 }
 
 static bool
+recovery_position_value(ZMODEM_PLAT_OFF_T result,uint32_t * position)
+{
+	if (result < 0) {
+		return false;
+	}
+#if UINTMAX_MAX > UINT32_MAX
+	if ((uintmax_t)result > UINT32_MAX) {
+		return false;
+	}
+#endif
+	*position = (uint32_t)result;
+	return true;
+}
+
+static bool
+recovery_position(const char * name,int file_fd,uint32_t * position)
+{
+	ZMODEM_PLAT_OFF_T result;
+
+	if (!file_position(file_fd,&result)) {
+		report_sender_errno("can't determine recovery position for",name,
+		    errno);
+		return false;
+	}
+	if (!recovery_position_value(result,position)) {
+		report_sender_file("invalid recovery position",name);
+		return false;
+	}
+	return true;
+}
+
+static bool
 read_file_block(int file_fd,uint8_t * restrict buffer,size_t capacity,
     size_t * restrict count,bool * restrict end_of_file)
 {
@@ -215,6 +247,19 @@ reduce_subpacket_size(void)
 		(void)fprintf(stderr,"zmtx: reducing data subpacket size to %zu bytes"
 		    " (maximum %zu)\n",subpacket_size,max_subpacket_size);
 	}
+}
+
+static bool
+account_recovery(uint32_t position,uint32_t * furthest_position,
+    unsigned * attempts)
+{
+	if (position > *furthest_position) {
+		*furthest_position = position;
+		*attempts = 0U;
+		return true;
+	}
+	*attempts += 1U;
+	return false;
 }
 
 static bool
@@ -326,10 +371,12 @@ show_progress(const char * name,int file_fd)
  * all the way to end of file or until something goes wrong.
  * (ZNAK or ZRPOS received)
  * the name is only used to show progress
+ * A recovery retransmission ends its first nonempty subpacket with ZCRCW
+ * and waits for ZACK, flushing stale data before streaming resumes.
  */
 
 static int
-send_from(const char * name,int file_fd)
+send_from(const char * name,int file_fd,bool synchronize_recovery)
 
 {
 	bool frame_open = false;
@@ -452,11 +499,13 @@ send_from(const char * name,int file_fd)
 			return ZFERR;
 		}
 		position += (ZMODEM_PLAT_OFF_T)n;
-		stop_after_ack = wait_each_block && end_of_file;
-		if ((n == 0U) || (!wait_each_block && end_of_file)) {
+		stop_after_ack = (wait_each_block || synchronize_recovery) &&
+		    end_of_file;
+		if ((n == 0U) || (!synchronize_recovery && !wait_each_block &&
+		    end_of_file)) {
 			frame_end = ZCRCE;
 		}
-		else if (wait_each_block ||
+		else if (synchronize_recovery || wait_each_block ||
 		    ((receiver_buffer_size != 0U) &&
 		    (segment_sent + n == receiver_buffer_size))) {
 			frame_end = ZCRCW;
@@ -502,6 +551,7 @@ send_from(const char * name,int file_fd)
 			last_ack_request = acknowledged_position;
 			frame_open = false;
 			segment_sent = 0;
+			synchronize_recovery = false;
 			increase_subpacket_size();
 			if (stop_after_ack) {
 				current_file_size = position;
@@ -586,7 +636,8 @@ send_file(const char * name)
 {
 	unsigned attempts;
 	uint32_t pos;
-	uint32_t furthest_recovery_position;
+	uint32_t furthest_attempted_position;
+	uint32_t furthest_receiver_position;
 	uint32_t size;
 	ZMODEM_PLAT_STAT_T s;
 	int file_fd;
@@ -595,6 +646,7 @@ send_file(const char * name)
 	size_t remaining;
 	uint8_t zfile_frame[] = { ZFILE, 0, 0, 0, 0 };
 	uint8_t zeof_frame[] = { ZEOF, 0, 0, 0, 0 };
+	bool synchronize_recovery = false;
 	int type;
 	int written;
 	const char * n;
@@ -802,7 +854,9 @@ send_file(const char * name)
 	transfer_clock_started =
 	    ZMODEM_PLAT_CLOCK_GETTIME(ZMODEM_PLAT_CLOCK_MONOTONIC,&transfer_start) == 0;
 	pos = zmodem_header_position(protocol.rxd_header);
-	furthest_recovery_position = pos;
+	/* Keep authoritative receiver progress separate from speculative output. */
+	furthest_attempted_position = pos;
+	furthest_receiver_position = pos;
 	attempts = 0U;
 
 	/* Only recovery requests without net progress consume the retry budget. */
@@ -816,7 +870,8 @@ send_file(const char * name)
 			(void)ZMODEM_PLAT_CLOSE(file_fd);
 			return SEND_FAILED;
 		}
-		type = send_from(n,file_fd);
+		type = send_from(n,file_fd,synchronize_recovery);
+		synchronize_recovery = false;
 		if (type == ZSKIP) {
 			(void)ZMODEM_PLAT_CLOSE(file_fd);
 			return SEND_SKIPPED;
@@ -825,24 +880,39 @@ send_file(const char * name)
 			uint32_t requested =
 			    zmodem_header_position(protocol.rxd_header);
 
-			if (requested > furthest_recovery_position) {
-				furthest_recovery_position = requested;
-				attempts = 0U;
-			}
-			else {
-				attempts += 1U;
+			if (account_recovery(requested,&furthest_receiver_position,
+			    &attempts)) {
+				/* Start a new attempted-progress epoch. */
+				furthest_attempted_position = requested;
 			}
 			pos = requested;
+			synchronize_recovery = true;
 			reduce_subpacket_size();
 			continue;
 		}
 		if (type == ZNAK) {
-			attempts += 1U;
+			uint32_t observed;
+
+			if (!recovery_position(name,file_fd,&observed)) {
+				(void)ZMODEM_PLAT_CLOSE(file_fd);
+				return SEND_FAILED;
+			}
+			(void)account_recovery(observed,&furthest_attempted_position,
+			    &attempts);
+			synchronize_recovery = true;
 			reduce_subpacket_size();
 			continue;
 		}
 		if (type == TIMEOUT) {
-			attempts += 1U;
+			uint32_t observed;
+
+			if (!recovery_position(name,file_fd,&observed)) {
+				(void)ZMODEM_PLAT_CLOSE(file_fd);
+				return SEND_FAILED;
+			}
+			(void)account_recovery(observed,&furthest_attempted_position,
+			    &attempts);
+			synchronize_recovery = true;
 			reduce_subpacket_size();
 			continue;
 		}
@@ -875,14 +945,12 @@ send_file(const char * name)
 				uint32_t requested =
 				    zmodem_header_position(protocol.rxd_header);
 
-				if (requested > furthest_recovery_position) {
-					furthest_recovery_position = requested;
-					attempts = 0U;
-				}
-				else {
-					attempts += 1U;
+				if (account_recovery(requested,
+				    &furthest_receiver_position,&attempts)) {
+					furthest_attempted_position = requested;
 				}
 				pos = requested;
+				synchronize_recovery = true;
 				resume = true;
 				break;
 			}

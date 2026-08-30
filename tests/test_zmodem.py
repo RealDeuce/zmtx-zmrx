@@ -1332,7 +1332,15 @@ class ZmodemTests(unittest.TestCase):
 
                 frame_type, position, _ = peer.header()
                 self.assertEqual((frame_type, position), (ZDATA, 0))
-                received = bytearray()
+                chunk, frame_end = peer.data()
+                self.assertEqual((chunk, frame_end),
+                                 (payload[:512], ZCRCW))
+                peer.send(hex_header(ZACK, len(chunk)))
+
+                frame_type, position, _ = peer.header()
+                self.assertEqual((frame_type, position),
+                                 (ZDATA, len(chunk)))
+                received = bytearray(chunk)
                 frame_end = ZCRCG
                 while frame_end == ZCRCG:
                     chunk, frame_end = peer.data()
@@ -1366,7 +1374,15 @@ class ZmodemTests(unittest.TestCase):
                 frame_type, position, _ = peer.header()
                 self.assertEqual((frame_type, position), (ZDATA, 0))
 
-                received = bytearray()
+                chunk, frame_end = peer.data()
+                self.assertEqual((chunk, frame_end),
+                                 (payload[:512], ZCRCW))
+                peer.send(hex_header(ZACK, len(chunk)))
+
+                frame_type, position, _ = peer.header()
+                self.assertEqual((frame_type, position),
+                                 (ZDATA, len(chunk)))
+                received = bytearray(chunk)
                 while True:
                     chunk, frame_end = peer.data()
                     received.extend(chunk)
@@ -1407,11 +1423,19 @@ class ZmodemTests(unittest.TestCase):
                 peer.send(hex_header(ZRPOS, 0))
                 chunk, frame_end = peer.data()
                 self.assertEqual((chunk, frame_end),
-                                 (payload[:512], ZCRCG))
+                                 (payload[:512], ZCRCW))
                 frame_type, position, _ = peer.header()
                 self.assertEqual((frame_type, position), (ZDATA, 0))
 
-                received = bytearray()
+                chunk, frame_end = peer.data()
+                self.assertEqual((chunk, frame_end),
+                                 (payload[:256], ZCRCW))
+                peer.send(hex_header(ZACK, len(chunk)))
+                frame_type, position, _ = peer.header()
+                self.assertEqual((frame_type, position),
+                                 (ZDATA, len(chunk)))
+
+                received = bytearray(chunk)
                 while True:
                     chunk, frame_end = peer.data()
                     received.extend(chunk)
@@ -2263,7 +2287,8 @@ class ZmodemTests(unittest.TestCase):
                 self.assertEqual((frame_type, position), (ZDATA, resume_position))
                 received, frame_end = peer.data()
                 self.assertEqual((received, frame_end),
-                                 (payload[resume_position:], ZCRCE))
+                                 (payload[resume_position:], ZCRCW))
+                peer.send(hex_header(ZACK, len(payload)))
                 frame_type, position, _ = peer.header()
                 self.assertEqual((frame_type, position), (ZEOF, len(payload)))
 
@@ -2429,6 +2454,82 @@ class ZmodemTests(unittest.TestCase):
                     process.kill()
                     process.wait()
 
+    def test_sender_resets_nak_limit_after_emitted_progress(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            payload = bytes(index & 0xFF for index in range(12345))
+            source = Path(temporary) / "progress-naks.bin"
+            source.write_bytes(payload)
+            process, peer, zrinit = self.start_sender(
+                temporary, source.name, "-s")
+            try:
+                for target in range(1024, 12 * 1024, 1024):
+                    while True:
+                        frame_type, position, _ = peer.header()
+                        self.assertEqual(frame_type, ZDATA)
+                        chunk, frame_end = peer.data()
+                        self.assertEqual(frame_end, ZCRCW)
+                        self.assertEqual(
+                            chunk, payload[position:position + len(chunk)])
+                        end = position + len(chunk)
+                        if end >= target:
+                            peer.send(hex_header(ZNAK))
+                            break
+                        peer.send(hex_header(ZACK, end))
+
+                received = bytearray()
+                while len(received) < len(payload):
+                    frame_type, position, _ = peer.header()
+                    self.assertEqual((frame_type, position),
+                                     (ZDATA, len(received)))
+                    chunk, frame_end = peer.data()
+                    self.assertEqual(frame_end, ZCRCW)
+                    received.extend(chunk)
+                    peer.send(hex_header(ZACK, len(received)))
+                self.assertEqual(bytes(received), payload)
+                self.finish_sender(peer, process, zrinit, len(payload))
+            finally:
+                peer.sock.close()
+                if process.poll() is None:
+                    process.kill()
+                    process.wait()
+
+    def test_sender_stops_after_naks_without_emitted_progress(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            payload = bytes(index & 0xFF for index in range(2049))
+            source = Path(temporary) / "stuck-naks.bin"
+            source.write_bytes(payload)
+            process, peer, _ = self.start_sender(
+                temporary, source.name, "-s", buffer_size=128)
+            try:
+                for _ in range(11):
+                    while True:
+                        frame_type, position, _ = peer.header()
+                        self.assertEqual(frame_type, ZDATA)
+                        chunk, frame_end = peer.data()
+                        self.assertEqual(frame_end, ZCRCW)
+                        self.assertEqual(
+                            chunk, payload[position:position + len(chunk)])
+                        end = position + len(chunk)
+                        if end == 1024:
+                            peer.send(hex_header(ZNAK))
+                            break
+                        self.assertLess(end, 1024)
+                        peer.send(hex_header(ZACK, end))
+
+                frame_type, _, _ = peer.header()
+                self.assertEqual(frame_type, ZFIN)
+                peer.send(hex_header(ZFIN))
+                self.assertEqual(bytes(peer.byte() for _ in range(2)), b"OO")
+                stderr = process.communicate(timeout=10)[1]
+                self.assertEqual(process.returncode, 4,
+                                 stderr.decode(errors="replace"))
+                self.assertIn(b"file transfer retries exhausted", stderr)
+            finally:
+                peer.sock.close()
+                if process.poll() is None:
+                    process.kill()
+                    process.wait()
+
     def test_sender_stops_after_repositions_without_progress(self):
         with tempfile.TemporaryDirectory() as temporary:
             payload = bytes(index & 0xFF for index in range(2048))
@@ -2538,7 +2639,15 @@ class ZmodemTests(unittest.TestCase):
 
                 frame_type, position, _ = peer.header()
                 self.assertEqual((frame_type, position), (ZDATA, 0))
-                received = bytearray()
+                chunk, frame_end = peer.data()
+                self.assertEqual((chunk, frame_end),
+                                 (payload[:512], ZCRCW))
+                peer.send(hex_header(ZACK, len(chunk)))
+
+                frame_type, position, _ = peer.header()
+                self.assertEqual((frame_type, position),
+                                 (ZDATA, len(chunk)))
+                received = bytearray(chunk)
                 frame_end = ZCRCG
                 while frame_end == ZCRCG:
                     chunk, frame_end = peer.data()
