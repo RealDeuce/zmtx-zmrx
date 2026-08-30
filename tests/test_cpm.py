@@ -77,7 +77,7 @@ def write_config(
         f'punch file = "{punch}"\n'
         "punch mode = raw\n"
         f'logfile = "{logfile}"\n'
-        "loglevel = 0\n",
+        "loglevel = 3\n",
         encoding="ascii",
     )
 
