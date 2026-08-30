@@ -89,7 +89,7 @@ def received_file(directory: Path, name: str) -> Path:
 
 def wait_pair(
     native: subprocess.Popen, cpm: subprocess.Popen, label: str, logfile: Path
-) -> None:
+) -> tuple:
     deadline = time.monotonic() + TIMEOUT
     while time.monotonic() < deadline:
         if native.poll() is not None and cpm.poll() is not None:
@@ -125,6 +125,7 @@ def wait_pair(
             f"CP/M stdout:\n{cpm_output.decode(errors='replace')}\n"
             f"CP/M stderr:\n{cpm_error.decode(errors='replace')}"
         )
+    return native_error, cpm_output, cpm_error
 
 
 def transfer(cpm_sender: bool) -> None:
@@ -186,14 +187,32 @@ def transfer(cpm_sender: bool) -> None:
             )
             native_input.close()
             native_output.close()
-            wait_pair(native, cpm, direction, logfile)
+            native_error, cpm_output, cpm_error = wait_pair(
+                native, cpm, direction, logfile
+            )
         finally:
             native_input.close()
             native_output.close()
             os.close(keep_native_to_cpm)
             os.close(keep_cpm_to_native)
 
-        received = received_file(destination_drive, "payload.bin").read_bytes()
+        try:
+            received_path = received_file(destination_drive, "payload.bin")
+        except RuntimeError as error:
+            punched = logged_bytes(logfile, "punch")
+            read = logged_bytes(logfile, "reader")
+            raise RuntimeError(
+                f"{error}\n"
+                f"native stderr:\n{native_error.decode(errors='replace')}\n"
+                f"CP/M stdout:\n{cpm_output.decode(errors='replace')}\n"
+                f"CP/M stderr:\n{cpm_error.decode(errors='replace')}\n"
+                f"logged CP/M console:\n{logged_console(logfile)}\n"
+                f"last punched bytes ({len(punched)} total): "
+                f"{punched[-256:].hex()}\n"
+                f"last reader bytes ({len(read)} total): "
+                f"{read[-256:].hex()}"
+            ) from error
+        received = received_path.read_bytes()
         if received != PAYLOAD:
             raise RuntimeError(
                 f"{direction} produced {len(received)} bytes; expected "
