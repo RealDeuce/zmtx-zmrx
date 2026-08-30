@@ -25,6 +25,39 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 Special thanks to Jacques Mattheij, formerly of Mattheij Computer Service,
 and original author of zmtx/zmrx.
 
+2.05 release notes (30/08/26)
+
+The protocol core is now strict C99 and independent of POSIX. POSIX remains
+the first-class platform, while a documented adapter contract supplies the
+small file, clock and terminal subset needed by other systems. The core works
+with 16-bit int, falls back to a 32-bit span scanner when uint64_t is absent,
+and offers a reduced-memory profile with 1 KiB subpackets and bytewise CRC32.
+Default 32-bit and 64-bit builds retain their existing buffers and optimized
+CRC and span paths.
+
+New second-class ports target CP/M 2.2 with Z88DK, 16-bit DOS with Open Watcom,
+and Windows 95. CP/M uses RDR:/PUN: and defaults to seven-bit-safe transfers.
+DOS supports BIOS, FOSSIL and direct 16550-compatible UART transports while
+retaining the full protocol buffers in the small memory model. Windows 95
+accepts COM or socket handles and can ZMODEM-escape Telnet IAC bytes without
+speaking the Telnet protocol. CI builds and exercises all three ports,
+including live CP/M and DOS transfers and Windows transport tests.
+
+Omen Technology's ZMODEM-90 extensions are now implemented from authenticated
+1997 DSZ.EXE disassembly. The 0x31 ESC8/RLE format is seven-bit clean,
+MobyTurbo provides negotiated transparent low-overhead framing, and Pack-7
+encodes binary payloads as printable base-88 groups. Pack-7 is negotiated
+rather than imposed and is the preferred CP/M mode for normally compressed
+files. Reproducible binary-range verification and two-way DSZ interoperability
+tests document and cross-check the recovered formats without redistributing
+DSZ.
+
+Control-character escaping now covers every required control value, CP/M file
+descriptors are mapped without relying on host descriptor identities, and
+mode negotiation rejects incompatible transparent and seven-bit selections.
+The expanded native, reduced-memory and cross-platform suites retain 100
+percent MC/DC coverage for production decisions.
+
 2.04 release notes (25/08/26)
 
 ESC8 now uses Omen Technology's normative ZMODEM-90 format recovered from a
