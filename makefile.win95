@@ -45,6 +45,13 @@ COMMON_OBJECTS=$(BUILD_DIR)/zmdm.obj $(BUILD_DIR)/crctab.obj &
 	$(BUILD_DIR)/plat.obj
 PROGRAMS=$(BUILD_DIR)/zmtx.exe $(BUILD_DIR)/zmrx.exe
 TEST_PROGRAM=$(BUILD_DIR)/test_win95.exe
+!ifndef WIN95_TEST_PATH
+!ifdef __UNIX__
+WIN95_TEST_PATH=$(TEST_PROGRAM)
+!else
+WIN95_TEST_PATH=$(BUILD_ROOT)\win95\test_win95.exe
+!endif
+!endif
 WIN95_HEADERS=version.h zmodem.h zmdm.h crctab.h crctab_slicing.h &
 	win95/plat.h win95/zmodem_plat.h
 MOCK_FLAGS=-dZMODEM_WIN95_TEST_MOCKS=1 &
@@ -61,7 +68,7 @@ check: .SYMBOLIC all
 	$(PYTHON) tests/test_win95.py --static-only
 
 check-runtime: .SYMBOLIC check $(TEST_PROGRAM)
-	$(WIN95_RUNNER) $(TEST_PROGRAM)
+	$(WIN95_RUNNER) $(WIN95_TEST_PATH)
 
 prepare: .SYMBOLIC
 !ifdef __UNIX__
