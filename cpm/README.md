@@ -18,6 +18,14 @@ writes the `PUN:` device using BDOS calls. Its read is blocking, and its poll
 and purge operations are no-ops because CP/M 2.2 has no portable status or
 flush calls for these devices.
 
+The generic driver currently requires `RDR:` and `PUN:` to preserve all eight
+bits. This is a stronger requirement than the CP/M 2.2 BIOS contract, which
+defines these logical devices as ASCII with the high bit clear. Many serial
+BIOS implementations are eight-bit transparent, but portable CP/M software
+cannot assume that they are. A system whose BIOS masks or uses bit 7 needs a
+machine-specific driver that accesses an eight-bit-clean serial device
+directly. The current `-b` mode does not make a seven-bit transport safe.
+
 A machine-specific overlay can replace it without changing the frontend:
 
 ```sh
@@ -43,7 +51,9 @@ tnylpo 1.2 and earlier use fully buffered stdio for raw `PUN:` files. That is
 fine for ordinary file output but deadlocks an interactive protocol connected
 through a FIFO. Apply `tests/tnylpo-unbuffered-output.patch` to tnylpo before
 building the test executable. This changes only the emulator's raw character
-device buffering; it is not needed on real CP/M hardware.
+device buffering; it is not needed on real CP/M hardware. Raw tnylpo devices
+also preserve all eight bits, so these tests model the class of CP/M systems
+on which the generic driver can operate.
 
 CP/M 2.2 records do not preserve an exact byte length for arbitrary files.
 Files whose length is not a multiple of 128 bytes may therefore be sent with
