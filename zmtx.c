@@ -208,6 +208,7 @@ parse_zrinit(void)
 	protocol.can_overlap_io =
 	    (protocol.rxd_header[ZF0] & ZF0_CANOVIO) != 0;
 	protocol.can_break = (protocol.rxd_header[ZF0] & ZF0_CANBRK) != 0;
+	protocol.can_rle = (protocol.rxd_header[ZF0] & ZF0_CANRLE) != 0;
 	protocol.can_fcs_32 = (protocol.rxd_header[ZF0] & ZF0_CANFC32) != 0;
 	protocol.escape_all_control_characters =
 	    (protocol.rxd_header[ZF0] & ZF0_ESCCTL) != 0;
@@ -1200,6 +1201,7 @@ main(int argc,char ** argv)
 		(void)fprintf(stderr,"receiver %s full duplex\n"          ,protocol.can_full_duplex               ? "can"      : "can't");
 		(void)fprintf(stderr,"receiver %s overlap io\n"           ,protocol.can_overlap_io                ? "can"      : "can't");
 		(void)fprintf(stderr,"receiver %s break\n"                ,protocol.can_break                     ? "can"      : "can't");
+		(void)fprintf(stderr,"receiver %s decode rle\n"           ,protocol.can_rle                       ? "can"      : "can't");
 		(void)fprintf(stderr,"receiver %s fcs 32\n"               ,protocol.can_fcs_32                    ? "can"      : "can't");
 		(void)fprintf(stderr,"receiver %s escaped control chars\n",protocol.escape_all_control_characters ? "requests" : "doesn't request");
 		(void)fprintf(stderr,"receiver %s escaped 8th bit\n"      ,protocol.escape_8th_bit                ? "requests" : "doesn't request");

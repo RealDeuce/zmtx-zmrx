@@ -35,7 +35,9 @@ subpacket.
 Request that the sender escape all control characters.
 .TP
 .B \-b
-Request that the sender escape all bytes with the eighth bit set.
+Request Omen ZMODEM-90 seven-bit-safe transport.  The sender uses the
+0x31 header format, RLE, CRC32, and SO/ZDLE eighth-bit quoting.  This is the
+default in the CP/M build.
 .TP
 .B \-l\fIline\fP
 File (typically a tty) to use for the transfer instead

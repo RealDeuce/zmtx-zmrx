@@ -162,7 +162,13 @@ would be exceeded.
 
 `zmrx -e` requests control-character escaping from the sender, while `zmrx -b`
 requests escaping of every byte with the eighth bit set. The options may be
-combined as `-eb` when both forms of transport protection are required.
+combined as `-eb` when both forms of transport protection are required. ESC8
+uses Omen's ZMODEM-90 `0x31` format: RLE and CRC32 are applied before a
+seven-bit-safe SO/ZDLE encoding. `zmrx` also advertises and accepts standard
+`ZBINR32` RLE. The older ZDLE-only ESC8 interpretation remains receive-only
+for compatibility with implementations such as Qodem. See the
+[DSZ disassembly evidence](docs/omen-esc8-disassembly.md) for the recovered
+wire format and reproducible binary verification.
 
 `zmtx -w32K` limits transmitted but unacknowledged data to a fixed 32 KiB
 window. Values are byte counts with an optional binary `K` or `M` suffix. A

@@ -48,6 +48,7 @@
 #define	EOT			UINT8_C(0x04)
 #define	ENQ			UINT8_C(0x05)
 #define	ACK			UINT8_C(0x06)
+#define	SO			UINT8_C(0x0e)
 #define	LF			UINT8_C(0x0a)
 #define	CR			UINT8_C(0x0d)
 #define	XON			UINT8_C(0x11)
@@ -76,6 +77,10 @@
 #define	ZHEX		UINT8_C(0x42)	/* hex frame indicator */
 #define	ZBIN32		UINT8_C(0x43)	/* binary frame indicator (CRC32) */
 #define	ZBINR32		UINT8_C(0x44)	/* run length encoded binary frame (CRC32) */
+
+/* Omen ZMODEM-90 7-bit formats recovered from DSZ.EXE 1997-05-25. */
+#define	ZBINR32ESC8	UINT8_C(0x31)	/* RLE, CRC32, and eighth-bit quoting */
+#define	ZBINP7		UINT8_C(0x32)	/* Pack-7 (not implemented) */
 
 #define	ZVBIN		UINT8_C(0x61)	/* binary frame indicator (CRC16) */
 #define	ZVHEX		UINT8_C(0x62)	/* hex frame indicator */
@@ -150,7 +155,7 @@
 #define	ZF0_CANFDX		UINT8_C(0x01)	/* Receiver can send and receive true full duplex */
 #define	ZF0_CANOVIO		UINT8_C(0x02)	/* receiver can receive data during disk I/O */
 #define	ZF0_CANBRK		UINT8_C(0x04)	/* receiver can send a break signal */
-#define	ZF0_CANCRY		UINT8_C(0x08)	/* Receiver can decrypt DONT USE */
+#define	ZF0_CANRLE		UINT8_C(0x08)	/* Receiver can decode RLE */
 #define	ZF0_CANLZW		UINT8_C(0x10)	/* Receiver can uncompress DONT USE */
 #define	ZF0_CANFC32		UINT8_C(0x20)	/* Receiver can use 32 bit Frame Check */
 #define	ZF0_ESCCTL		UINT8_C(0x40)	/* Receiver expects ctl chars to be escaped */

@@ -141,6 +141,17 @@ append_escaped(uint8_t * output,size_t offset,uint8_t byte)
 	return offset + 1U;
 }
 
+static size_t
+append_legacy_escape8(uint8_t * output,size_t offset,uint8_t byte)
+{
+	if ((byte & UINT8_C(0x80)) != 0U) {
+		output[offset++] = ZDLE;
+		output[offset++] = byte ^ UINT8_C(0x40);
+		return offset;
+	}
+	return append_escaped(output,offset,byte);
+}
+
 static bool
 test_header_position(void)
 {
@@ -606,7 +617,7 @@ static bool
 test_eighth_bit_escaping(void)
 
 {
-	uint8_t payload[128];
+	uint8_t payload[256];
 	struct zmodem sender;
 	struct zmodem receiver;
 	struct fake_io sending_io;
@@ -614,11 +625,14 @@ test_eighth_bit_escaping(void)
 	uint8_t received[sizeof(payload)];
 	uint8_t frame_end;
 	size_t length;
+	size_t index;
 	unsigned value;
 	bool passed;
+	bool found_resc_quote = false;
+	bool seven_bit_wire = true;
 
 	for (value=0;value<sizeof(payload);value++) {
-		payload[value] = (uint8_t)(value | 0x80U);
+		payload[value] = (uint8_t)value;
 	}
 	initialize(&sender,&sending_io);
 	sender.escape_8th_bit = true;
@@ -626,19 +640,33 @@ test_eighth_bit_escaping(void)
 	    "transmit with eighth-bit escaping");
 	passed = expect(sending_io.output_length >= 4U,
 	    "eighth-bit escaped wire length") && passed;
-	passed = expect(sending_io.output[0] == ZDLE,
-	    "first eighth-bit escape marker") && passed;
-	passed = expect(sending_io.output[1] ==
-	    (uint8_t)(payload[0] ^ 0x40U),
-	    "first eighth-bit escaped value") && passed;
-	passed = expect(sending_io.output[2] == ZDLE,
-	    "second eighth-bit escape marker") && passed;
-	passed = expect(sending_io.output[3] ==
-	    (uint8_t)(payload[1] ^ 0x40U),
-	    "second eighth-bit escaped value") && passed;
+	for (index=0U;index + 1U<sending_io.output_length;index++) {
+		if ((sending_io.output[index] & UINT8_C(0x80)) != 0U) {
+			seven_bit_wire = false;
+		}
+		if (sending_io.output[index] == ZRESC &&
+		    sending_io.output[index + 1U] == UINT8_C(0x40)) {
+			found_resc_quote = true;
+		}
+	}
+	if ((sending_io.output[sending_io.output_length - 1U] &
+	    UINT8_C(0x80)) != 0U) {
+		seven_bit_wire = false;
+	}
+	passed = expect(seven_bit_wire,"Omen data wire is seven-bit clean") &&
+	    passed;
+	passed = expect(found_resc_quote,"RLE quote for literal ZRESC") &&
+	    passed;
+	passed = expect(memchr(sending_io.output,SO,
+	    sending_io.output_length) != NULL,
+	    "SO prefixes ordinary high-bit values") && passed;
+	passed = expect(memchr(sending_io.output,UINT8_C(0x73),
+	    sending_io.output_length) != NULL,
+	    "private escape represents 0x80") && passed;
 
 	initialize(&receiver,&receiving_io);
-	receiver.receive_escaped_8th_bit = true;
+	receiver.receive_escape8_format = ZMODEM_ESCAPE8_OMEN;
+	receiver.receive_rle_data = true;
 	(void)memcpy(receiving_io.input,sending_io.output,
 	    sending_io.output_length);
 	receiving_io.input_length = sending_io.output_length;
@@ -651,6 +679,486 @@ test_eighth_bit_escaping(void)
 	    "eighth-bit escaped packet terminator") && passed;
 	passed = expect(memcmp(received,payload,sizeof(payload)) == 0,
 	    "eighth-bit escaped packet payload") && passed;
+	return passed;
+}
+
+static bool
+test_omen_header_round_trip(void)
+{
+	static const uint8_t header[HDRLEN] = {
+		ZDATA,UINT8_C(0x80),SO,ZDLE,UINT8_C(0xff)
+	};
+	struct zmodem sender;
+	struct zmodem receiver;
+	struct fake_io sending_io;
+	struct fake_io receiving_io;
+	size_t i;
+	bool passed;
+	bool seven_bit_wire = true;
+
+	initialize(&sender,&sending_io);
+	sender.escape_8th_bit = true;
+	passed = expect(tx_header(&sender,header) == 0,
+	    "transmit Omen ESC8 header");
+	passed = expect(sending_io.output_length > 4U,
+	    "Omen ESC8 header length") && passed;
+	passed = expect(sending_io.output[0] == ZPAD,
+	    "Omen ESC8 header pad") && passed;
+	passed = expect(sending_io.output[1] == ZDLE,
+	    "Omen ESC8 header escape") && passed;
+	passed = expect(sending_io.output[2] == ZBINR32ESC8,
+	    "Omen ESC8 header indicator") && passed;
+	passed = expect(sending_io.output[3] == UINT8_C(0x26),
+	    "Omen ESC8 header parameter count") && passed;
+	for (i=0U;i<sending_io.output_length;i++) {
+		if ((sending_io.output[i] & UINT8_C(0x80)) != 0U) {
+			seven_bit_wire = false;
+		}
+	}
+	passed = expect(seven_bit_wire,"Omen header wire is seven-bit clean") &&
+	    passed;
+
+	initialize(&receiver,&receiving_io);
+	(void)memcpy(receiving_io.input,sending_io.output,
+	    sending_io.output_length);
+	receiving_io.input_length = sending_io.output_length;
+	passed = expect(rx_header(&receiver,1000) == ZDATA,
+	    "receive Omen ESC8 header") && passed;
+	passed = expect(receiver.rxd_header_len == HDRLEN,
+	    "Omen ESC8 header length") && passed;
+	passed = expect(receiver.receive_32_bit_data,
+	    "Omen ESC8 selects CRC32") && passed;
+	passed = expect(receiver.receive_escape8_format == ZMODEM_ESCAPE8_OMEN,
+	    "Omen ESC8 selects data decoder") && passed;
+	passed = expect(memcmp(receiver.rxd_header,header,sizeof(header)) == 0,
+	    "Omen ESC8 header bytes") && passed;
+	return passed;
+}
+
+static bool
+test_omen_rle_round_trip(void)
+{
+	static const uint8_t streaming_ends[] = { ZCRCG,ZCRCQ };
+	struct zmodem sender;
+	struct zmodem receiver;
+	struct fake_io sending_io;
+	struct fake_io receiving_io;
+	uint8_t payload[160];
+	uint8_t received[sizeof(payload)];
+	uint8_t frame_end;
+	size_t payload_length = 0U;
+	size_t length;
+	size_t run;
+	bool passed;
+
+	payload[payload_length++] = 'A';
+	payload[payload_length++] = 'A';
+	payload[payload_length++] = ZRESC;
+	payload[payload_length++] = ZRESC;
+	payload[payload_length++] = UINT8_C(0x81);
+	payload[payload_length++] = UINT8_C(0x81);
+	for (run=0U;run<3U;run++) {
+		payload[payload_length++] = UINT8_C(0x20);
+	}
+	payload[payload_length++] = 'C';
+	for (run=0U;run<35U;run++) {
+		payload[payload_length++] = UINT8_C(0x20);
+	}
+	for (run=0U;run<64U;run++) {
+		payload[payload_length++] = 'B';
+	}
+	payload[payload_length++] = UINT8_C(0x82);
+
+	initialize(&sender,&sending_io);
+	sender.escape_8th_bit = true;
+	sender.escape_all_control_characters = true;
+	passed = expect(tx_data(&sender,ZCRCW,payload,payload_length) == 0,
+	    "transmit Omen RLE variants");
+
+	initialize(&receiver,&receiving_io);
+	receiver.receive_escape8_format = ZMODEM_ESCAPE8_OMEN;
+	receiver.receive_rle_data = true;
+	receiver.receive_escaped_control_characters = true;
+	receiving_io.input[0] = XON;
+	receiving_io.input[1] = UINT8_C(1);
+	(void)memcpy(&receiving_io.input[2],sending_io.output,
+	    sending_io.output_length);
+	receiving_io.input_length = sending_io.output_length + 2U;
+	passed = expect(rx_data(&receiver,received,sizeof(received),&length,
+	    &frame_end) == ENDOFFRAME,"receive Omen RLE variants") && passed;
+	passed = expect(length == payload_length,"Omen RLE variant length") &&
+	    passed;
+	passed = expect(frame_end == ZCRCW,"Omen RLE variant terminator") &&
+	    passed;
+	passed = expect(memcmp(received,payload,payload_length) == 0,
+	    "Omen RLE variant payload") && passed;
+	for (run=0U;run<sizeof(streaming_ends);run++) {
+		initialize(&sender,&sending_io);
+		sender.escape_8th_bit = true;
+		passed = expect(tx_data(&sender,streaming_ends[run],payload,
+		    payload_length) == 0,"transmit streaming Omen RLE frame") &&
+		    passed;
+		initialize(&receiver,&receiving_io);
+		receiver.receive_escape8_format = ZMODEM_ESCAPE8_OMEN;
+		receiver.receive_rle_data = true;
+		(void)memcpy(receiving_io.input,sending_io.output,
+		    sending_io.output_length);
+		receiving_io.input_length = sending_io.output_length;
+		passed = expect(rx_data(&receiver,received,sizeof(received),&length,
+		    &frame_end) == FRAMEOK,"receive streaming Omen RLE frame") &&
+		    passed;
+		passed = expect(frame_end == streaming_ends[run],
+		    "streaming Omen RLE terminator") && passed;
+	}
+	return passed;
+}
+
+static bool
+test_omen_header_rejection(void)
+{
+	static const uint8_t header[HDRLEN] = { ZDATA,1U,2U,3U,4U };
+	struct zmodem sender;
+	struct zmodem receiver;
+	struct fake_io sending_io;
+	struct fake_io receiving_io;
+	size_t cut;
+	bool passed = true;
+
+	initialize(&sender,&sending_io);
+	sender.escape_8th_bit = true;
+	passed = expect(tx_header(&sender,header) == 0,
+	    "make Omen header for rejection tests") && passed;
+	for (cut=0U;cut<sending_io.output_length;cut++) {
+		initialize(&receiver,&receiving_io);
+		(void)memcpy(receiving_io.input,sending_io.output,cut);
+		receiving_io.input_length = cut;
+		passed = expect(rx_header(&receiver,1000) < 0,
+		    "reject truncated Omen header") && passed;
+	}
+
+	initialize(&receiver,&receiving_io);
+	(void)memcpy(receiving_io.input,sending_io.output,
+	    sending_io.output_length);
+	receiving_io.input_length = sending_io.output_length;
+	receiving_io.input[receiving_io.input_length - 1U] ^= UINT8_C(1);
+	passed = expect(rx_header_and_check(&receiver,1000) == ZMODEM_TIMEOUT,
+	    "reject corrupt Omen header CRC") && passed;
+	passed = expect(receiving_io.output_length > 0U,
+	    "corrupt Omen header sends ZNAK") && passed;
+
+	initialize(&receiver,&receiving_io);
+	receiving_io.input[0] = ZPAD;
+	receiving_io.input[1] = ZDLE;
+	receiving_io.input[2] = ZBINR32ESC8;
+	receiving_io.input[3] = UINT8_C(0x21);
+	receiving_io.input_length = 4U;
+	passed = expect(rx_header_and_check(&receiver,1000) == ZMODEM_TIMEOUT,
+	    "reject short Omen parameter count") && passed;
+
+	initialize(&receiver,&receiving_io);
+	receiving_io.input[0] = ZPAD;
+	receiving_io.input[1] = ZDLE;
+	receiving_io.input[2] = ZBINR32ESC8;
+	receiving_io.input[3] = UINT8_C(0x23) + ZMAXHLEN;
+	receiving_io.input_length = 4U;
+	passed = expect(rx_header_and_check(&receiver,1000) == ZMODEM_TIMEOUT,
+	    "reject oversized Omen parameter count") && passed;
+
+	initialize(&receiver,&receiving_io);
+	(void)memcpy(receiving_io.input,sending_io.output,3U);
+	receiving_io.input[3] = XON;
+	(void)memcpy(&receiving_io.input[4],&sending_io.output[3],
+	    sending_io.output_length - 3U);
+	receiving_io.input_length = sending_io.output_length + 1U;
+	passed = expect(rx_header(&receiver,1000) == ZDATA,
+	    "ignore flow control before Omen parameter count") && passed;
+
+	initialize(&receiver,&receiving_io);
+	receiving_io.input[0] = ZPAD;
+	receiving_io.input[1] = ZDLE;
+	receiving_io.input[2] = ZBINR32ESC8;
+	receiving_io.input[3] = UINT8_C(0x26);
+	receiving_io.input[4] = ZDLE;
+	receiving_io.input[5] = '?';
+	receiving_io.input_length = 6U;
+	passed = expect(rx_header_and_check(&receiver,1000) == ZMODEM_TIMEOUT,
+	    "reject invalid Omen escape code") && passed;
+
+	initialize(&receiver,&receiving_io);
+	receiving_io.input[0] = ZPAD;
+	receiving_io.input[1] = ZDLE;
+	receiving_io.input[2] = ZBINR32ESC8;
+	receiving_io.input[3] = UINT8_C(0x26);
+	receiving_io.input[4] = SO;
+	receiving_io.input_length = 5U;
+	passed = expect(rx_header(&receiver,1000) == ZMODEM_TIMEOUT,
+	    "report truncated Omen high-bit prefix") && passed;
+
+	initialize(&receiver,&receiving_io);
+	receiving_io.input[0] = ZPAD;
+	receiving_io.input[1] = ZDLE;
+	receiving_io.input[2] = ZBINR32ESC8;
+	receiving_io.input[3] = UINT8_C(0x26);
+	receiving_io.input[4] = ZDLE;
+	receiving_io.input[5] = ZCRCE;
+	receiving_io.input_length = 6U;
+	passed = expect(rx_header_and_check(&receiver,1000) == ZMODEM_TIMEOUT,
+	    "reject frame end in Omen header") && passed;
+	return passed;
+}
+
+static bool
+test_omen_buffer_boundaries(void)
+{
+	static uint8_t payload[ZMODEM_TX_DATA_WIRE_CAPACITY / 3U + 2U];
+	struct zmodem protocol;
+	struct fake_io fake;
+	size_t triples = ZMODEM_TX_DATA_WIRE_CAPACITY / 3U;
+	size_t remainder = ZMODEM_TX_DATA_WIRE_CAPACITY % 3U;
+	size_t exact_length = triples + (remainder == 0U ? 0U : 1U);
+	size_t i;
+	bool passed;
+
+	passed = expect(exact_length + 1U <= ZMAXSPLEN,
+	    "Omen output buffer boundary fits one subpacket");
+	for (i=0U;i<triples;i++) {
+		payload[i] = (i & 1U) == 0U ? UINT8_C(0x81) : UINT8_C(0x82);
+	}
+	if (remainder == 1U) {
+		payload[triples] = 'C';
+	}
+	else if (remainder == 2U) {
+		payload[triples] = UINT8_C(0xff);
+	}
+	payload[exact_length] = UINT8_C(0x83);
+
+	initialize(&protocol,&fake);
+	protocol.escape_8th_bit = true;
+	protocol.escape_all_control_characters = true;
+	passed = expect(tx_data(&protocol,ZCRCE,payload,exact_length) == 0,
+	    "flush exactly full Omen buffer") && passed;
+	passed = expect(fake.write_calls == 2U,
+	    "exact Omen buffer uses two writes") && passed;
+
+	initialize(&protocol,&fake);
+	protocol.escape_8th_bit = true;
+	protocol.escape_all_control_characters = true;
+	passed = expect(tx_data(&protocol,ZCRCE,payload,exact_length + 1U) == 0,
+	    "flush Omen buffer before encoded byte") && passed;
+	passed = expect(fake.write_calls == 2U,
+	    "crossing Omen buffer uses two writes") && passed;
+
+	initialize(&protocol,&fake);
+	protocol.escape_8th_bit = true;
+	protocol.escape_all_control_characters = true;
+	fake.fail_write_call = 1U;
+	passed = expect(tx_data(&protocol,ZCRCE,payload,exact_length + 1U) != 0,
+	    "report intermediate Omen buffer write failure") && passed;
+	return passed;
+}
+
+static bool
+test_standard_rle_receive(void)
+{
+	static const uint8_t tokens[] = {
+		ZRESC,UINT8_C(0x43),'A',
+		ZRESC,UINT8_C(0x42),ZRESC,
+		UINT8_C(0x20),UINT8_C(0x20)
+	};
+	static const uint8_t expected[] = {
+		'A','A','A',ZRESC,ZRESC,UINT8_C(0x20),UINT8_C(0x20)
+	};
+	struct zmodem protocol;
+	struct zmodem sender;
+	struct fake_io fake;
+	struct fake_io sending_io;
+	uint8_t header[HDRLEN] = { ZDATA,1U,2U,3U,4U };
+	uint8_t received[sizeof(expected)];
+	uint8_t frame_end;
+	uint32_t crc;
+	size_t offset = 0U;
+	size_t length;
+	size_t i;
+	bool passed;
+
+	initialize(&sender,&sending_io);
+	sender.can_fcs_32 = true;
+	passed = expect(tx_header(&sender,header) == 0,
+	    "make standard RLE header");
+	sending_io.output[3] = ZBINR32;
+	initialize(&protocol,&fake);
+	(void)memcpy(fake.input,sending_io.output,sending_io.output_length);
+	fake.input_length = sending_io.output_length;
+	passed = expect(rx_header(&protocol,1000) == ZDATA,
+	    "receive standard RLE header") && passed;
+	passed = expect(protocol.receive_rle_data,
+	    "standard RLE header selects decoder") && passed;
+	fake.input_length = 0U;
+	fake.input_offset = 0U;
+	for (i=0U;i<sizeof(tokens);i++) {
+		offset = append_escaped(fake.input,offset,tokens[i]);
+	}
+	crc = crc32_update(UINT32_MAX,tokens,sizeof(tokens));
+	crc = ~crc32_byte_update(crc,ZCRCE);
+	fake.input[offset++] = ZDLE;
+	fake.input[offset++] = ZCRCE;
+	for (i=0U;i<sizeof(crc);i++) {
+		offset = append_escaped(fake.input,offset,(uint8_t)crc);
+		crc >>= 8;
+	}
+	fake.input_length = offset;
+	passed = expect(rx_data(&protocol,received,sizeof(received),&length,
+	    &frame_end) == ENDOFFRAME,"receive standard RLE packet");
+	passed = expect(length == sizeof(expected),"standard RLE length") &&
+	    passed;
+	passed = expect(memcmp(received,expected,sizeof(expected)) == 0,
+	    "standard RLE payload") && passed;
+	return passed;
+}
+
+static size_t
+append_rle_packet(uint8_t * output,const uint8_t * tokens,size_t token_count,
+    uint8_t frame_end)
+{
+	uint32_t crc = crc32_update(UINT32_MAX,tokens,token_count);
+	size_t offset = 0U;
+	size_t i;
+
+	crc = ~crc32_byte_update(crc,frame_end);
+	for (i=0U;i<token_count;i++) {
+		offset = append_escaped(output,offset,tokens[i]);
+	}
+	output[offset++] = ZDLE;
+	output[offset++] = frame_end;
+	for (i=0U;i<sizeof(crc);i++) {
+		offset = append_escaped(output,offset,(uint8_t)crc);
+		crc >>= 8;
+	}
+	return offset;
+}
+
+static bool
+test_rle_rejection(void)
+{
+	static const uint8_t invalid_counts[] = {
+		UINT8_C(0x1f),UINT8_C(0x41),UINT8_C(0x80)
+	};
+	struct zmodem protocol;
+	struct fake_io fake;
+	uint8_t received[4];
+	uint8_t frame_end;
+	size_t length;
+	size_t i;
+	bool passed = true;
+
+	initialize(&protocol,&fake);
+	protocol.receive_32_bit_data = true;
+	protocol.receive_rle_data = true;
+	passed = expect(rx_data(&protocol,received,sizeof(received),&length,
+	    &frame_end) == ZMODEM_TIMEOUT,"report empty RLE input timeout") &&
+	    passed;
+
+	for (i=0U;i<sizeof(invalid_counts);i++) {
+		initialize(&protocol,&fake);
+		protocol.receive_32_bit_data = true;
+		protocol.receive_rle_data = true;
+		fake.input[0] = ZRESC;
+		fake.input[1] = invalid_counts[i];
+		fake.input_length = 2U;
+		passed = expect(rx_data(&protocol,received,sizeof(received),&length,
+		    &frame_end) == ZMODEM_INVALID_DATA,
+		    "reject invalid RLE count") && passed;
+	}
+
+	initialize(&protocol,&fake);
+	protocol.receive_32_bit_data = true;
+	protocol.receive_rle_data = true;
+	fake.input[0] = ZRESC;
+	fake.input[1] = ZDLE;
+	fake.input[2] = ZCRCE;
+	fake.input_length = 3U;
+	passed = expect(rx_data(&protocol,received,sizeof(received),&length,
+	    &frame_end) == ZMODEM_INVALID_DATA,
+	    "reject frame end inside RLE token") && passed;
+
+	initialize(&protocol,&fake);
+	protocol.receive_32_bit_data = true;
+	protocol.receive_rle_data = true;
+	fake.input_length = append_rle_packet(fake.input,
+	    (const uint8_t[]){ 'A' },1U,ZCRCE);
+	fake.input[fake.input_length - 1U] ^= UINT8_C(1);
+	passed = expect(rx_data(&protocol,received,sizeof(received),&length,
+	    &frame_end) == ZMODEM_INVALID_DATA,"reject corrupt RLE CRC") &&
+	    passed;
+
+	initialize(&protocol,&fake);
+	protocol.receive_32_bit_data = true;
+	protocol.receive_rle_data = true;
+	fake.input_length = append_rle_packet(fake.input,
+	    (const uint8_t[]){ 'A' },1U,ZCRCE) - 1U;
+	passed = expect(rx_data(&protocol,received,sizeof(received),&length,
+	    &frame_end) == ZMODEM_TIMEOUT,"report truncated RLE CRC") && passed;
+
+	initialize(&protocol,&fake);
+	protocol.receive_32_bit_data = true;
+	protocol.receive_rle_data = true;
+	fake.input[0] = 'A';
+	fake.input[1] = ZDLE;
+	fake.input[2] = ZCRCE;
+	fake.input[3] = ZDLE;
+	fake.input[4] = ZCRCE;
+	fake.input_length = 5U;
+	passed = expect(rx_data(&protocol,received,sizeof(received),&length,
+	    &frame_end) == ZMODEM_INVALID_DATA,
+	    "reject frame end in RLE CRC") && passed;
+
+	initialize(&protocol,&fake);
+	protocol.receive_32_bit_data = true;
+	protocol.receive_rle_data = true;
+	fake.input_length = append_rle_packet(fake.input,
+	    (const uint8_t[]){ ZRESC,UINT8_C(0x7f),'A' },3U,ZCRCE);
+	passed = expect(rx_data(&protocol,received,1U,&length,&frame_end) ==
+	    ZMODEM_INVALID_DATA,"reject expanded RLE overflow") && passed;
+	passed = expect(length == 1U,"retain bounded RLE output") && passed;
+	return passed;
+}
+
+static bool
+test_legacy_escape8_receive(void)
+{
+	static const uint8_t payload[] = {
+		UINT8_C(0x80),UINT8_C(0x91),UINT8_C(0xd3),UINT8_C(0xff)
+	};
+	struct zmodem protocol;
+	struct fake_io fake;
+	uint8_t received[sizeof(payload)];
+	uint8_t frame_end;
+	uint32_t crc;
+	size_t offset = 0U;
+	size_t length;
+	size_t i;
+	bool passed;
+
+	initialize(&protocol,&fake);
+	crc = crc32_update(UINT32_MAX,payload,sizeof(payload));
+	crc = ~crc32_byte_update(crc,ZCRCE);
+	for (i=0U;i<sizeof(payload);i++) {
+		offset = append_legacy_escape8(fake.input,offset,payload[i]);
+	}
+	fake.input[offset++] = ZDLE;
+	fake.input[offset++] = ZCRCE;
+	for (i=0U;i<sizeof(crc);i++) {
+		offset = append_legacy_escape8(fake.input,offset,(uint8_t)crc);
+		crc >>= 8;
+	}
+	fake.input_length = offset;
+	protocol.receive_32_bit_data = true;
+	protocol.receive_escape8_format = ZMODEM_ESCAPE8_LEGACY;
+	passed = expect(rx_data(&protocol,received,sizeof(received),&length,
+	    &frame_end) == ENDOFFRAME,"receive legacy ESC8 packet");
+	passed = expect(length == sizeof(payload),"legacy ESC8 length") && passed;
+	passed = expect(memcmp(received,payload,sizeof(payload)) == 0,
+	    "legacy ESC8 payload") && passed;
 	return passed;
 }
 
@@ -892,6 +1400,11 @@ test_data_packets(void)
 	passed = data_round_trip(false,false,ZCRCG,FRAMEOK) && passed;
 	passed = data_round_trip(false,false,ZCRCQ,FRAMEOK) && passed;
 	passed = test_eighth_bit_escaping() && passed;
+	passed = test_omen_rle_round_trip() && passed;
+	passed = test_omen_buffer_boundaries() && passed;
+	passed = test_standard_rle_receive() && passed;
+	passed = test_rle_rejection() && passed;
+	passed = test_legacy_escape8_receive() && passed;
 	passed = test_iac_escaping() && passed;
 	passed = test_data_read_failures(false) && passed;
 	passed = test_data_read_failures(true) && passed;
@@ -1086,7 +1599,7 @@ test_reject_frame_end_in_header_crc(bool use_crc32)
 }
 
 static bool
-header_round_trip(bool use_crc32)
+header_round_trip(bool use_crc32,bool variable)
 {
 	struct zmodem sender;
 	struct zmodem receiver;
@@ -1097,6 +1610,7 @@ header_round_trip(bool use_crc32)
 	initialize(&sender,&sending_io);
 	sender.can_fcs_32 = true;
 	sender.want_fcs_32 = use_crc32;
+	sender.use_variable_headers = variable;
 	if (!expect(tx_header(&sender,header) == 0,"transmit binary header")) {
 		return false;
 	}
@@ -1106,10 +1620,86 @@ header_round_trip(bool use_crc32)
 	receiving_io.input_length = sending_io.output_length;
 	return expect(rx_header(&receiver,1000) == ZDATA,
 	    "receive binary header") &&
+	    expect(receiver.rxd_header_len == HDRLEN,
+	    "binary header length") &&
 	    expect(receiver.receive_32_bit_data == use_crc32,
 	    "binary header CRC selection") &&
 	    expect(memcmp(receiver.rxd_header,header,sizeof(header)) == 0,
 	    "binary header bytes");
+}
+
+static bool
+test_extended_variable_header(void)
+{
+	static const uint8_t input[] =
+	    "**\030" "b1001000007af000000000000000000000000397e\r\212\021";
+	struct zmodem protocol;
+	struct fake_io fake;
+	bool passed;
+
+	initialize(&protocol,&fake);
+	(void)memcpy(fake.input,input,sizeof(input) - 1U);
+	fake.input_length = sizeof(input) - 1U;
+	passed = expect(rx_header(&protocol,1000) == ZRINIT,
+	    "receive extended variable header");
+	passed = expect(protocol.rxd_header_len == ZMAXHLEN + 1U,
+	    "maximum variable header length") && passed;
+	passed = expect(protocol.rxd_header[4] == UINT8_C(0xaf),
+	    "extended variable header contents") && passed;
+	return passed;
+}
+
+static bool
+test_variable_header_rejection(void)
+{
+	static const uint8_t header[HDRLEN] = { ZDATA,1U,2U,3U,4U };
+	struct zmodem sender;
+	struct zmodem receiver;
+	struct fake_io sending_io;
+	struct fake_io receiving_io;
+	bool passed = true;
+
+	initialize(&receiver,&receiving_io);
+	receiving_io.input[0] = ZPAD;
+	receiving_io.input[1] = ZDLE;
+	receiving_io.input[2] = ZVBIN;
+	receiving_io.input_length = 3U;
+	passed = expect(rx_header(&receiver,1000) == ZMODEM_TIMEOUT,
+	    "report missing variable header length") && passed;
+
+	initialize(&receiver,&receiving_io);
+	receiving_io.input[0] = ZPAD;
+	receiving_io.input[1] = ZDLE;
+	receiving_io.input[2] = ZVBIN;
+	receiving_io.input[3] = HDRLEN - 2U;
+	receiving_io.input_length = 4U;
+	passed = expect(rx_header_and_check(&receiver,1000) == ZMODEM_TIMEOUT,
+	    "reject short variable header") && passed;
+
+	initialize(&receiver,&receiving_io);
+	receiving_io.input[0] = ZPAD;
+	receiving_io.input[1] = ZDLE;
+	receiving_io.input[2] = ZVBIN;
+	receiving_io.input[3] = ZMAXHLEN + 1U;
+	receiving_io.input_length = 4U;
+	passed = expect(rx_header_and_check(&receiver,1000) == ZMODEM_TIMEOUT,
+	    "reject oversized variable header") && passed;
+
+	initialize(&sender,&sending_io);
+	sender.can_fcs_32 = true;
+	sender.use_variable_headers = true;
+	passed = expect(tx_header(&sender,header) == 0,
+	    "make variable RLE header") && passed;
+	sending_io.output[3] = ZVBINR32;
+	initialize(&receiver,&receiving_io);
+	(void)memcpy(receiving_io.input,sending_io.output,
+	    sending_io.output_length);
+	receiving_io.input_length = sending_io.output_length;
+	passed = expect(rx_header(&receiver,1000) == ZDATA,
+	    "receive variable RLE header") && passed;
+	passed = expect(receiver.receive_rle_data,
+	    "variable RLE header selects decoder") && passed;
+	return passed;
 }
 
 static bool
@@ -1152,6 +1742,10 @@ transmit_header_style(struct zmodem * protocol,const uint8_t * header,
 	if (style == 0U) {
 		return tx_hex_header(protocol,header);
 	}
+	if (style == 3U) {
+		protocol->escape_8th_bit = true;
+		return tx_header(protocol,header);
+	}
 	protocol->can_fcs_32 = true;
 	protocol->want_fcs_32 = style == 2U;
 	return tx_header(protocol,header);
@@ -1167,8 +1761,11 @@ test_header_write_failures(void)
 	unsigned variable_value;
 	bool passed = true;
 
-	for (style = 0U; style < 3U; style++) {
+	for (style = 0U; style < 4U; style++) {
 		for (variable_value = 0U; variable_value < 2U; variable_value++) {
+			if (style == 3U && variable_value != 0U) {
+				continue;
+			}
 			size_t call;
 			size_t successful_calls;
 
@@ -1301,8 +1898,14 @@ test_header_variants(void)
 	uint8_t input[sizeof(good_hex) + 3U];
 	bool passed = true;
 
-	passed = header_round_trip(false) && passed;
-	passed = header_round_trip(true) && passed;
+	passed = header_round_trip(false,false) && passed;
+	passed = header_round_trip(true,false) && passed;
+	passed = header_round_trip(false,true) && passed;
+	passed = header_round_trip(true,true) && passed;
+	passed = test_extended_variable_header() && passed;
+	passed = test_variable_header_rejection() && passed;
+	passed = test_omen_header_round_trip() && passed;
+	passed = test_omen_header_rejection() && passed;
 	initialize(&protocol,&fake);
 	protocol.use_variable_headers = true;
 	passed = expect(tx_hex_header(&protocol,header) == 0,

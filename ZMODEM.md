@@ -461,7 +461,7 @@ of the receiver capability flags:
 | `CANFDX` | Receiver can send and receive true full duplex |
 | `CANOVIO` | Receiver can receive data during disk I/O |
 | `CANBRK` | Receiver can send a break signal |
-| `CANCRY` | Receiver can decrypt |
+| `CANRLE` | Receiver can decode run-length encoding |
 | `CANLZW` | Receiver can uncompress |
 | `CANFC32` | Receiver can use 32-bit Frame Check |
 | `ESCCTL` | Receiver expects control characters to be escaped |
@@ -897,6 +897,40 @@ approach that of full streaming.  For example, 16 KB segmented
 streaming adds about 3 per cent to full streaming ZMODEM file
 transfer times when the round trip delay is five seconds.
 
+## Omen ZMODEM-90 seven-bit and RLE framing
+
+The published text names `ESC8`, `ZBINR32`, and `ZTRLE` without completely
+specifying their wire representation. The following format is recovered from
+Omen Technology's 1997 `DSZ.EXE`, which is treated as normative where the text
+is incomplete. The binary hashes, routine addresses, and reproduction command
+are recorded in the [DSZ disassembly evidence](docs/omen-esc8-disassembly.md).
+
+An ESC8 header begins `ZPAD ZDLE 0x31`. The next raw seven-bit byte is
+`0x22 + parameter_count`; the ordinary four-parameter header therefore uses
+`0x26`. The quoted frame type and parameters are followed by little-endian
+CRC32. That CRC covers the header bytes followed by the literal string
+`Copyright 1989 Omen Technology INC All Rights Reserved`.
+
+For seven-bit quoting, an ordinary high-bit byte is sent as `SO` (`0x0e`)
+followed by its low seven bits. The private ZDLE codes `l` through `t` encode,
+respectively, `0x7f`, `0xff`, `0x0e`, `0x8e`, `0x90`, `0x91`, `0x93`, `0x80`,
+and `0x98`. Other control bytes retain normal ZDLE/XOR-`0x40` quoting. With
+`ESCCTL`, a high-bit control can therefore become three wire bytes:
+`SO ZDLE (low7 ^ 0x40)`.
+
+Mode `0x31` applies RLE before seven-bit quoting and uses CRC32 over the RLE
+token stream plus the data-subpacket terminator. `ZRESC` (`0x7e`) introduces
+the following tokens:
+
+- `ZRESC 0x40` represents one literal `ZRESC`.
+- `ZRESC (run + 0x1d)` represents 3 through 34 spaces.
+- `ZRESC (run + 0x40) value` represents 2 through 63 copies of `value`.
+- A two-byte run of an ordinary low-seven-bit value remains literal.
+
+Long runs are split at 63 bytes. Standard `ZBINR32` uses the same RLE token
+grammar and CRC32 calculation with ordinary ZDLE quoting instead of the
+seven-bit layer.
+
 ## Constants
 
 ### ASCII control characters
@@ -910,6 +944,7 @@ transfer times when the round trip delay is five seconds.
 | `ACK` | `0x06` |
 | `LF` | `0x0a` |
 | `CR` | `0x0d` |
+| `SO` | `0x0e` |
 | `XON` | `0x11` |
 | `XOFF` | `0x13` |
 | `NAK` | `0x15` |
@@ -926,6 +961,7 @@ transfer times when the round trip delay is five seconds.
 | `ZHEX` | `0x42` | Hex frame indicator |
 | `ZBIN32` | `0x43` | Binary frame indicator (CRC32) |
 | `ZBINR32` | `0x44` | Run Length encoded binary frame (CRC32) |
+| `ZBINR32ESC8` | `0x31` | Omen RLE, CRC32, and seven-bit-safe eighth-bit quoting |
 | `ZVBIN` | `0x61` | Binary frame indicator (CRC16) |
 | `ZVHEX` | `0x62` | Hex frame indicator |
 | `ZVBIN32` | `0x63` | Binary frame indicator (CRC32) |
@@ -975,7 +1011,7 @@ transfer times when the round trip delay is five seconds.
 | `CANFDX` | `0x01` | Receiver can send and receive true full duplex |
 | `CANOVIO` | `0x02` | Receiver can receive data during disk I/O |
 | `CANBRK` | `0x04` | Receiver can send a break signal |
-| `CANCRY` | `0x08` | Receiver can decrypt |
+| `CANRLE` | `0x08` | Receiver can decode run-length encoding |
 | `CANLZW` | `0x10` | Receiver can uncompress |
 | `CANFC32` | `0x20` | Receiver can use 32-bit Frame Check |
 | `ESCCTL` | `0x40` | Receiver expects control characters to be escaped |

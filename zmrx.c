@@ -72,7 +72,7 @@ static bool opt_d = false;				/* show debug output */
 static bool opt_q = false;
 static bool opt_s = ZMODEM_PLAT_DEFAULT_NONSTREAMING;
 static bool opt_escape_control = false;
-static bool opt_escape_8th_bit = false;
+static bool opt_escape_8th_bit = ZMODEM_PLAT_DEFAULT_ESCAPE_8TH_BIT;
 static bool junk_pathnames = ZMODEM_PLAT_DEFAULT_JUNK_PATHNAMES;	/* junk incoming path names or keep them */
 static uint8_t rx_data_subpacket[ZMAXSPLEN];
 static uint8_t attention_sequence[ZATTNLEN];
@@ -383,7 +383,8 @@ tx_zrinit(void)
 {
 	unsigned receive_buffer_size = ZMODEM_PLAT_RECEIVE_BUFFER_SIZE(&plat_io);
 	uint8_t zrinit_header[] = {
-		ZRINIT, 0, 0, 0, ZF0_CANBRK | ZF0_CANFDX | ZF0_CANOVIO | ZF0_CANFC32
+		ZRINIT, 0, 0, 0, ZF0_CANBRK | ZF0_CANFDX | ZF0_CANOVIO |
+		    ZF0_CANRLE | ZF0_CANFC32
 	};
 
 	if (opt_s) {
@@ -400,7 +401,7 @@ tx_zrinit(void)
 	}
 	if (opt_escape_8th_bit) {
 		zrinit_header[ZF0] |= ZF0_ESC8;
-		protocol.receive_escaped_8th_bit = true;
+		protocol.receive_escape8_format = ZMODEM_ESCAPE8_LEGACY;
 	}
 
 	return tx_hex_header(&protocol,zrinit_header);

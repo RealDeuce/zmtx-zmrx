@@ -18,13 +18,14 @@ writes the `PUN:` device using BDOS calls. Its read is blocking, and its poll
 and purge operations are no-ops because CP/M 2.2 has no portable status or
 flush calls for these devices.
 
-The generic driver currently requires `RDR:` and `PUN:` to preserve all eight
-bits. This is a stronger requirement than the CP/M 2.2 BIOS contract, which
-defines these logical devices as ASCII with the high bit clear. Many serial
-BIOS implementations are eight-bit transparent, but portable CP/M software
-cannot assume that they are. A system whose BIOS masks or uses bit 7 needs a
-machine-specific driver that accesses an eight-bit-clean serial device
-directly. The current `-b` mode does not make a seven-bit transport safe.
+The CP/M receiver requests Omen's ZMODEM-90 ESC8 mode by default, making
+receive transfers safe when the BIOS clears bit 7. The sender uses the same
+seven-bit-safe `0x31` header, RLE, and SO/ZDLE data encoding when the remote
+receiver requests ESC8. This is the portable path for the CP/M 2.2 BIOS
+contract, which defines `RDR:` and `PUN:` as ASCII devices. Eight-bit-clean
+machine-specific drivers remain useful for peers that do not implement ESC8.
+The recovered wire format and disassembly evidence are documented in
+[`docs/omen-esc8-disassembly.md`](../docs/omen-esc8-disassembly.md).
 
 A machine-specific overlay can replace it without changing the frontend:
 
@@ -52,8 +53,8 @@ fine for ordinary file output but deadlocks an interactive protocol connected
 through a FIFO. Apply `tests/tnylpo-unbuffered-output.patch` to tnylpo before
 building the test executable. This changes only the emulator's raw character
 device buffering; it is not needed on real CP/M hardware. Raw tnylpo devices
-also preserve all eight bits, so these tests model the class of CP/M systems
-on which the generic driver can operate.
+preserve all eight bits; the CP/M default still negotiates ESC8, so the live
+tests exercise the seven-bit-safe protocol path.
 
 CP/M 2.2 records do not preserve an exact byte length for arbitrary files.
 Files whose length is not a multiple of 128 bytes may therefore be sent with

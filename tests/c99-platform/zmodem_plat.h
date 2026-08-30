@@ -47,6 +47,7 @@ struct zmodem_c99_utimbuf {
 #define ZMODEM_PLAT_ERROR_IO 3
 #define ZMODEM_PLAT_DEFAULT_NONSTREAMING false
 #define ZMODEM_PLAT_DEFAULT_JUNK_PATHNAMES false
+#define ZMODEM_PLAT_DEFAULT_ESCAPE_8TH_BIT false
 #define ZMODEM_PLAT_REQUIRES_NONSTREAMING(io) ((void)(io),false)
 #define ZMODEM_PLAT_RECEIVE_BUFFER_SIZE(io) ((void)(io),0U)
 #define ZMODEM_PLAT_ESCAPE_IAC(io) ((void)(io),false)

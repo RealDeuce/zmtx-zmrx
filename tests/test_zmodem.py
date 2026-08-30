@@ -25,6 +25,7 @@ ZDLE = 0x18
 ZBIN = 0x41
 ZHEX = 0x42
 ZBIN32 = 0x43
+ZBINR32ESC8 = 0x31
 ZVBIN = 0x61
 ZVHEX = 0x62
 ZVBIN32 = 0x63
@@ -47,11 +48,13 @@ ZF1_ZMNEW = 5
 ZF1_ZMPROT = 7
 ZF0_ESCCTL = 0x40
 ZF0_ESC8 = 0x80
+ZF0_CANRLE = 0x08
 ZCRCE = 0x68
 ZCRCG = 0x69
 ZCRCQ = 0x6A
 ZCRCW = 0x6B
 ESCAPE_BYTES = {ZDLE, 0x10, 0x90, XON, 0x91, 0x13, 0x93}
+OMEN_HEADER_CRC_SUFFIX = b"Copyright 1989 Omen Technology INC All Rights Reserved"
 FILE_WRITE_LIMIT = 16 * 1024 * 1024
 
 
@@ -122,6 +125,7 @@ class Peer:
         self.sock.settimeout(10)
         self.buffer = bytearray()
         self.use_crc32 = False
+        self.use_omen = False
         self.require_escaped_controls = False
 
     def send(self, data):
@@ -138,19 +142,18 @@ class Peer:
         return value
 
     def header(self):
-        matched = 0
-        marker = b"**\x18"
-        while matched != len(marker):
+        while self.byte() != ZPAD:
+            pass
+        value = self.byte()
+        if value == ZPAD:
             value = self.byte()
-            if value == marker[matched]:
-                matched += 1
-            else:
-                matched = 1 if value == marker[0] else 0
+        if value != ZDLE:
+            raise AssertionError(f"bad header prefix byte {value:#x}")
         style = self.byte()
         if style in (ZHEX, ZVHEX):
             length = 5
             if style == ZVHEX:
-                length = int(bytes((self.byte(), self.byte())), 16)
+                length = int(bytes((self.byte(), self.byte())), 16) + 1
             encoded = bytes(self.byte() for _ in range(2 * (length + 2)))
             raw = bytes.fromhex(encoded.decode("ascii"))
             header = raw[:length]
@@ -159,22 +162,94 @@ class Peer:
             if self.byte() != 0x0D or self.byte() != 0x0A:
                 raise AssertionError("bad received hex-header terminator")
         elif style in (ZBIN, ZVBIN):
-            length = 5 if style == ZBIN else self._data_byte()
+            length = 5 if style == ZBIN else self._data_byte() + 1
             raw = bytes(self._data_byte() for _ in range(length + 2))
             header = raw[:length]
             if crc16(header) != int.from_bytes(raw[length:], "big"):
                 raise AssertionError("bad CRC in received binary header")
         elif style in (ZBIN32, ZVBIN32):
-            length = 5 if style == ZBIN32 else self._data_byte()
+            length = 5 if style == ZBIN32 else self._data_byte() + 1
             raw = bytes(self._data_byte() for _ in range(length + 4))
             header = raw[:length]
             if (zlib.crc32(header) & 0xFFFFFFFF) != \
                     int.from_bytes(raw[length:], "little"):
                 raise AssertionError("bad CRC in received CRC32 header")
+        elif style == ZBINR32ESC8:
+            parameter_count = self.byte() - 0x22
+            if not 0 <= parameter_count <= 16:
+                raise AssertionError("bad Omen ESC8 header length")
+            length = parameter_count + 1
+            raw = bytes(self._omen_byte() for _ in range(length + 4))
+            header = raw[:length]
+            expected = zlib.crc32(header + OMEN_HEADER_CRC_SUFFIX) & 0xFFFFFFFF
+            if expected != int.from_bytes(raw[length:], "little"):
+                raise AssertionError("bad CRC in received Omen ESC8 header")
         else:
             raise AssertionError(f"unexpected header style {style:#x}")
-        self.use_crc32 = style in (ZBIN32, ZVBIN32)
+        self.use_crc32 = style in (ZBIN32, ZVBIN32, ZBINR32ESC8)
+        self.use_omen = style == ZBINR32ESC8
         return header[0], int.from_bytes(header[1:], "little"), header
+
+    def _omen_byte(self, *, allow_frame_end=False):
+        high = False
+        while True:
+            value = self.byte() & 0x7F
+            if value in (XON, 0x13):
+                continue
+            if value == 0x0E:
+                high = True
+                continue
+            if value != ZDLE:
+                return value | (0x80 if high else 0)
+            value = self.byte() & 0x7F
+            while value in (XON, 0x13):
+                value = self.byte() & 0x7F
+            if allow_frame_end and value in (ZCRCE, ZCRCG, ZCRCQ, ZCRCW):
+                return value + 0x100
+            special = {
+                0x6C: 0x7F, 0x6D: 0xFF, 0x6E: 0x0E,
+                0x6F: 0x8E, 0x70: 0x90, 0x71: 0x91,
+                0x72: 0x93, 0x73: 0x80, 0x74: 0x98,
+            }
+            if value in special:
+                return special[value] | (0x80 if high else 0)
+            if value & 0x60 == 0x40:
+                return (value ^ 0x40) | (0x80 if high else 0)
+            raise AssertionError(f"unexpected Omen ZDLE sequence {value:#x}")
+
+    def _omen_data(self):
+        tokens = bytearray()
+        payload = bytearray()
+        while True:
+            value = self._omen_byte(allow_frame_end=True)
+            if value > 0xFF:
+                frame_end = value & 0xFF
+                break
+            tokens.append(value)
+            if value != 0x7E:
+                payload.append(value)
+                continue
+            count = self._omen_byte()
+            tokens.append(count)
+            if count == 0x40:
+                payload.append(0x7E)
+            elif 0x20 <= count <= 0x3F:
+                payload.extend(b" " * (count - 0x1D))
+            elif 0x42 <= count <= 0x7F:
+                repeated = self._omen_byte()
+                tokens.append(repeated)
+                payload.extend(bytes((repeated,)) * (count - 0x40))
+            else:
+                raise AssertionError(f"bad Omen RLE count {count:#x}")
+        received_crc = int.from_bytes(
+            bytes(self._omen_byte() for _ in range(4)), "little")
+        expected_crc = zlib.crc32(tokens + bytes((frame_end,))) & 0xFFFFFFFF
+        if received_crc != expected_crc:
+            raise AssertionError(
+                f"bad Omen data CRC: {received_crc:#x} != {expected_crc:#x}")
+        if frame_end == ZCRCW and self.byte() != XON:
+            raise AssertionError("missing XON after Omen ZCRCW subpacket")
+        return bytes(payload), frame_end
 
     def _data_byte(self, *, require_escaped_8th=False):
         value = self.byte()
@@ -209,6 +284,8 @@ class Peer:
         raise AssertionError(f"unexpected ZDLE sequence {value:#x}")
 
     def data(self, *, require_escaped_8th=False):
+        if self.use_omen:
+            return self._omen_data()
         payload = bytearray()
         while True:
             value = self.byte()
@@ -598,6 +675,21 @@ class ZmodemTests(unittest.TestCase):
                     if process.poll() is None:
                         process.kill()
                         process.wait()
+
+    def test_receiver_advertises_rle(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            process, peer = self.start_receiver(temporary)
+            try:
+                self.assertEqual(peer.initial_header[4] & ZF0_CANRLE,
+                                 ZF0_CANRLE)
+                returncode, stderr = finish_receiver(peer, process)
+                self.assertEqual(
+                    returncode, 0, stderr.decode(errors="replace"))
+            finally:
+                peer.sock.close()
+                if process.poll() is None:
+                    process.kill()
+                    process.wait()
 
     def test_receiver_acknowledges_sender_initialization(self):
         with tempfile.TemporaryDirectory() as temporary:

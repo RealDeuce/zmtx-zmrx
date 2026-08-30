@@ -27,6 +27,15 @@ and original author of zmtx/zmrx.
 
 2.04 release notes (25/08/26)
 
+ESC8 now uses Omen Technology's normative ZMODEM-90 format recovered from a
+verified 1997 DSZ.EXE disassembly: 0x31 headers, RLE before quoting, CRC32 over
+the token stream, and SO/ZDLE seven-bit encoding. The CP/M receiver requests
+this mode by default. Standard ZBINR32 input is supported and the receiver now
+advertises Omen's CANRLE capability; the previous ZDLE-only ESC8 form remains
+available as a header-distinguished receive compatibility path. A verifier and
+addressed disassembly report make the provenance reproducible without
+redistributing DSZ.
+
 Sender recovery no longer exhausts its retry allowance merely because a long
 transfer encounters more than ten separate errors. An advancing ZRPOS now
 resets the retry budget, while repeated or stale recovery requests remain

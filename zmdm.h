@@ -54,6 +54,12 @@ enum zmodem_result {
 	ZMODEM_END_OF_FRAME = 2
 };
 
+enum zmodem_escape8_format {
+	ZMODEM_ESCAPE8_NONE,
+	ZMODEM_ESCAPE8_LEGACY,
+	ZMODEM_ESCAPE8_OMEN
+};
+
 #define ENDOFFRAME ZMODEM_END_OF_FRAME
 #define FRAMEOK ZMODEM_FRAME_OK
 #define TIMEOUT ZMODEM_TIMEOUT
@@ -77,21 +83,24 @@ struct zmodem_io {
 
 struct zmodem {
 	struct zmodem_io io;
-	uint8_t rxd_header[ZMAXHLEN];
+	/* Frame type followed by at most ZMAXHLEN information bytes. */
+	uint8_t rxd_header[ZMAXHLEN + 1U];
 	size_t rxd_header_len;
 	bool can_full_duplex;
 	bool can_overlap_io;
 	bool can_break;
 	bool can_fcs_32;
+	bool can_rle;
 	bool escape_all_control_characters;
 	bool escape_8th_bit;
 	bool escape_iac;
-	bool receive_escaped_8th_bit;
+	enum zmodem_escape8_format receive_escape8_format;
 	bool use_variable_headers;
 	bool management_newer;
 	bool management_clobber;
 	bool management_protect;
 	bool receive_32_bit_data;
+	bool receive_rle_data;
 	bool want_fcs_32;
 	uint8_t input_buffer[ZMODEM_INPUT_CAPACITY];
 	size_t input_count;
