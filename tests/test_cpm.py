@@ -27,6 +27,12 @@ def logged_console(logfile: Path) -> str:
     return bytes(int(value, 16) for value in values).decode(errors="replace")
 
 
+def logged_tail(logfile: Path, length: int = 32768) -> str:
+    if not logfile.exists():
+        return ""
+    return logfile.read_text(errors="replace")[-length:]
+
+
 def logged_bytes(logfile: Path, device: str) -> bytes:
     if not logfile.exists():
         return b""
@@ -207,6 +213,7 @@ def transfer(cpm_sender: bool) -> None:
                 f"CP/M stdout:\n{cpm_output.decode(errors='replace')}\n"
                 f"CP/M stderr:\n{cpm_error.decode(errors='replace')}\n"
                 f"logged CP/M console:\n{logged_console(logfile)}\n"
+                f"tnylpo log tail:\n{logged_tail(logfile)}\n"
                 f"last punched bytes ({len(punched)} total): "
                 f"{punched[-256:].hex()}\n"
                 f"last reader bytes ({len(read)} total): "
