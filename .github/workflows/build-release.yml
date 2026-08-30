@@ -181,7 +181,7 @@ jobs:
           target: nt
 
       - name: Build and test Windows 95 programs
-        run: wmake -f makefile.win95 check-runtime MKDIR=mkdir
+        run: wmake -f makefile.win95 check-runtime
 
   release:
     name: Package source release

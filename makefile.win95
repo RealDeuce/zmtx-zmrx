@@ -12,8 +12,11 @@ WIN95_CPPFLAGS=
 !ifndef WIN95_CFLAGS
 WIN95_CFLAGS=
 !endif
+!ifndef BUILD_ROOT
+BUILD_ROOT=build
+!endif
 !ifndef BUILD_DIR
-BUILD_DIR=build/win95
+BUILD_DIR=$(BUILD_ROOT)/win95
 !endif
 !ifndef PYTHON
 PYTHON=python
@@ -22,7 +25,11 @@ PYTHON=python
 WIN95_RUNNER=
 !endif
 !ifndef MKDIR
+!ifdef __UNIX__
 MKDIR=mkdir -p
+!else
+MKDIR=mkdir
+!endif
 !endif
 
 COMMON_FLAGS=-bt=nt -3r -zastd=c99 -ze -w=4 -we -ox -os -zc
@@ -53,7 +60,12 @@ check-runtime: .SYMBOLIC check $(TEST_PROGRAM)
 	$(WIN95_RUNNER) $(TEST_PROGRAM)
 
 prepare: .SYMBOLIC
+!ifdef __UNIX__
 	$(MKDIR) $(BUILD_DIR)
+!else
+	if not exist $(BUILD_ROOT) $(MKDIR) $(BUILD_ROOT)
+	if not exist $(BUILD_DIR) $(MKDIR) $(BUILD_DIR)
+!endif
 
 $(BUILD_DIR)/zmtx.exe: $(BUILD_DIR)/zmtx.obj $(COMMON_OBJECTS)
 	$(WCL) $(LINK_FLAGS) -fm=$(BUILD_DIR)/zmtx.map &
