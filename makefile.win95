@@ -22,7 +22,11 @@ BUILD_DIR=$(BUILD_ROOT)/win95
 PYTHON=python
 !endif
 !ifndef WIN95_RUNNER
+!ifdef __UNIX__
 WIN95_RUNNER=
+!else
+WIN95_RUNNER=cmd /c
+!endif
 !endif
 !ifndef MKDIR
 !ifdef __UNIX__
