@@ -107,8 +107,12 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y build-essential libncurses-dev
-          git clone --branch 1.2 --depth 1 \
-            https://gitlab.com/gbrein/tnylpo.git /tmp/tnylpo
+          git init /tmp/tnylpo
+          git -C /tmp/tnylpo remote add origin \
+            https://gitlab.com/gbrein/tnylpo.git
+          git -C /tmp/tnylpo fetch --depth 1 origin \
+            3216c00c7a97d373b51192a96da46510f75f1adb
+          git -C /tmp/tnylpo checkout --detach FETCH_HEAD
           patch --directory=/tmp/tnylpo --strip=1 \
             < tests/tnylpo-unbuffered-output.patch
           make --directory=/tmp/tnylpo tnylpo
