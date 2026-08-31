@@ -688,6 +688,9 @@ test_omen_header_round_trip(void)
 	static const uint8_t header[HDRLEN] = {
 		ZDATA,UINT8_C(0x80),SO,ZDLE,UINT8_C(0xff)
 	};
+	static const uint8_t extended_header[ZMODEM90_ZRPOS_HEADER_LEN] = {
+		ZRPOS,0U,0U,0U,0U,0U,0U,ZMODEM90_REQUEST_PACK7
+	};
 	struct zmodem sender;
 	struct zmodem receiver;
 	struct fake_io sending_io;
@@ -732,6 +735,35 @@ test_omen_header_round_trip(void)
 	    "Omen ESC8 selects data decoder") && passed;
 	passed = expect(memcmp(receiver.rxd_header,header,sizeof(header)) == 0,
 	    "Omen ESC8 header bytes") && passed;
+
+	initialize(&sender,&sending_io);
+	sender.escape_8th_bit = true;
+	passed = expect(tx_header_length(&sender,extended_header,
+	    sizeof(extended_header)) == 0,"transmit extended Omen header") &&
+	    passed;
+	passed = expect(sending_io.output[2] == ZBINR32ESC8,
+	    "extended Omen header indicator") && passed;
+	passed = expect(sending_io.output[3] ==
+	    UINT8_C(0x22) + sizeof(extended_header) - 1U,
+	    "extended Omen parameter count") && passed;
+	seven_bit_wire = true;
+	for (i=0U;i<sending_io.output_length;i++) {
+		if ((sending_io.output[i] & UINT8_C(0x80)) != 0U) {
+			seven_bit_wire = false;
+		}
+	}
+	passed = expect(seven_bit_wire,
+	    "extended Omen header wire is seven-bit clean") && passed;
+	initialize(&receiver,&receiving_io);
+	(void)memcpy(receiving_io.input,sending_io.output,
+	    sending_io.output_length);
+	receiving_io.input_length = sending_io.output_length;
+	passed = expect(rx_header(&receiver,1000) == ZRPOS,
+	    "receive extended Omen header") && passed;
+	passed = expect(receiver.rxd_header_len == sizeof(extended_header),
+	    "extended Omen header length") && passed;
+	passed = expect(memcmp(receiver.rxd_header,extended_header,
+	    sizeof(extended_header)) == 0,"extended Omen header bytes") && passed;
 	return passed;
 }
 
@@ -2049,7 +2081,7 @@ header_round_trip(bool use_crc32,bool variable)
 	initialize(&sender,&sending_io);
 	sender.can_fcs_32 = true;
 	sender.want_fcs_32 = use_crc32;
-	sender.use_variable_headers = variable;
+	sender.peer_can_variable_headers = variable;
 	if (!expect(tx_header(&sender,header) == 0,"transmit binary header")) {
 		return false;
 	}
@@ -2059,6 +2091,8 @@ header_round_trip(bool use_crc32,bool variable)
 	receiving_io.input_length = sending_io.output_length;
 	return expect(rx_header(&receiver,1000) == ZDATA,
 	    "receive binary header") &&
+	    expect(sending_io.output[3] == (use_crc32 ? ZBIN32 : ZBIN),
+	    "ordinary binary header uses fixed format") &&
 	    expect(receiver.rxd_header_len == HDRLEN,
 	    "binary header length") &&
 	    expect(receiver.receive_32_bit_data == use_crc32,
@@ -2112,7 +2146,9 @@ test_extended_variable_header(void)
 static bool
 test_variable_header_rejection(void)
 {
-	static const uint8_t header[HDRLEN] = { ZDATA,1U,2U,3U,4U };
+	static const uint8_t extended_header[HDRLEN + 1U] = {
+		ZDATA,1U,2U,3U,4U,0U
+	};
 	struct zmodem sender;
 	struct zmodem receiver;
 	struct fake_io sending_io;
@@ -2147,8 +2183,8 @@ test_variable_header_rejection(void)
 
 	initialize(&sender,&sending_io);
 	sender.can_fcs_32 = true;
-	sender.use_variable_headers = true;
-	passed = expect(tx_header(&sender,header) == 0,
+	passed = expect(tx_header_length(&sender,extended_header,
+	    sizeof(extended_header)) == 0,
 	    "make variable RLE header") && passed;
 	sending_io.output[3] = ZVBINR32;
 	initialize(&receiver,&receiving_io);
@@ -2198,32 +2234,36 @@ static int
 transmit_header_style(struct zmodem * protocol,const uint8_t * header,
     unsigned style,bool variable)
 {
-	protocol->use_variable_headers = variable;
+	size_t count = variable ? HDRLEN + 1U : HDRLEN;
+
+	protocol->peer_can_variable_headers = variable;
 	if (style == 0U) {
-		return tx_hex_header(protocol,header);
+		return tx_header_length(protocol,header,count);
 	}
 	if (style == 3U) {
 		protocol->escape_8th_bit = true;
-		return tx_header(protocol,header);
+		return tx_header_length(protocol,header,count);
 	}
 	if (style == 4U) {
 		protocol->use_mobyturbo = true;
-		return tx_header(protocol,header);
+		return tx_header_length(protocol,header,count);
 	}
 	if (style == 5U) {
 		protocol->escape_8th_bit = true;
 		protocol->use_pack7 = true;
-		return tx_header(protocol,header);
+		return tx_header_length(protocol,header,count);
 	}
 	protocol->can_fcs_32 = true;
 	protocol->want_fcs_32 = style == 2U;
-	return tx_header(protocol,header);
+	return tx_header_length(protocol,header,count);
 }
 
 static bool
 test_header_write_failures(void)
 {
-	uint8_t header[HDRLEN] = { ZDATA,ZDLE,XON,CR,UINT8_C(0xff) };
+	uint8_t header[HDRLEN + 1U] = {
+		ZDATA,ZDLE,XON,CR,UINT8_C(0xff),0U
+	};
 	struct zmodem protocol;
 	struct fake_io fake;
 	unsigned style;
@@ -2383,11 +2423,11 @@ test_header_variants(void)
 	passed = test_mobyturbo_round_trip() && passed;
 	passed = test_mobyturbo_probe() && passed;
 	initialize(&protocol,&fake);
-	protocol.use_variable_headers = true;
+	protocol.peer_can_variable_headers = true;
 	passed = expect(tx_hex_header(&protocol,header) == 0,
-	    "transmit variable hex header") && passed;
-	if (expect(fake.output_length > 4U,"variable hex header length")) {
-		passed = expect(fake.output[3] == ZVHEX,"variable hex marker") &&
+	    "transmit ordinary hex header") && passed;
+	if (expect(fake.output_length > 4U,"ordinary hex header length")) {
+		passed = expect(fake.output[3] == ZHEX,"fixed hex marker") &&
 		    passed;
 	}
 	else {

@@ -334,7 +334,7 @@ tx_hex_header_length(struct zmodem * restrict zmodem,
 	    tx_raw(zmodem,ZDLE) != 0) {
 		return -1;
 	}
-	if (zmodem->use_variable_headers || count != HDRLEN) {
+	if (count != HDRLEN) {
 		if (tx_raw(zmodem,ZVHEX) != 0 ||
 		    tx_hex(zmodem,(int)(count - 1U)) != 0) {
 			return -1;
@@ -383,7 +383,7 @@ tx_bin32_header(struct zmodem * restrict zmodem,
 	    tx_raw(zmodem,ZDLE) != 0) {
 		return -1;
 	}
-	if (zmodem->use_variable_headers || count != HDRLEN) {
+	if (count != HDRLEN) {
 		if (tx_raw(zmodem,ZVBIN32) != 0 ||
 		    tx(zmodem,(uint8_t)(count - 1U)) != 0) {
 			return -1;
@@ -420,7 +420,7 @@ tx_bin16_header(struct zmodem * restrict zmodem,
 	    tx_raw(zmodem,ZDLE) != 0) {
 		return -1;
 	}
-	if (zmodem->use_variable_headers || count != HDRLEN) {
+	if (count != HDRLEN) {
 		if (tx_raw(zmodem,ZVBIN) != 0 ||
 		    tx(zmodem,(uint8_t)(count - 1U)) != 0) {
 			return -1;

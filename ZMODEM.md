@@ -934,8 +934,10 @@ seven-bit layer.
 ### Pack-7 framing
 
 Pack-7 is negotiated with bit `0x02` in parameter six of an extended `ZRPOS`.
-It uses the same quoted, salted-CRC32 header as `0x31`, with indicator `0x32`.
-The sender remains in `0x31` mode when the request is absent or ignored.
+The receiver sends that extended header only when the sender advertised
+variable-header support with `ZFILE.ZF3` bit `0x01`. It uses the same quoted,
+salted-CRC32 header as `0x31`, with indicator `0x32`. The sender remains in
+`0x31` mode when the request is absent or ignored.
 
 Each group of one through four data bytes is interpreted as a big-endian
 integer and encoded as exactly two through five base-88 digits. Digits are
@@ -959,11 +961,12 @@ cannot request less.
 
 Before `ZFILE`, a Moby-capable sender emits the raw transparency probe
 `23 c1 d4 93 11`. The sender offers MobyTurbo by setting bit `0x04` in
-`ZFILE.ZF3`; a receiver may also request it locally. Only a receiver which saw
-the complete probe unchanged requests the mode. Its `ZRPOS` is a variable
-seven-parameter header: parameters four and five are zero and bit `0x01` of
-parameter six requests MobyTurbo. The sender changes modes only after that
-request, so the `ZFILE` header and metadata retain ordinary framing.
+`ZFILE.ZF3` and variable-header support with `ZFILE.ZF3` bit `0x01`; a receiver
+may also request it locally. Only a receiver which saw the complete probe
+unchanged and the variable-header offer requests the mode. Its `ZRPOS` is a
+variable seven-parameter header: parameters four and five are zero and bit
+`0x01` of parameter six requests MobyTurbo. The sender changes modes only
+after that request, so the `ZFILE` header and metadata retain ordinary framing.
 
 A MobyTurbo header begins `ZPAD ZDLE 0x33`, followed by the unoffset parameter
 count, the frame type and parameters, and little-endian CRC32. As with Omen's

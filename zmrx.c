@@ -219,7 +219,7 @@ tx_zrpos(uint32_t position)
 	if (current_mobyturbo) {
 		flags |= ZMODEM90_REQUEST_MOBYTURBO;
 	}
-	if (opt_pack7) {
+	if (opt_pack7 && protocol.peer_can_variable_headers) {
 		flags |= ZMODEM90_REQUEST_PACK7;
 	}
 	if (flags == 0U) {
@@ -541,7 +541,10 @@ receive_file(void)
 	bool management_selected = false;
 
 	receive_error_reported = false;
-	current_mobyturbo = !opt_M && !opt_escape_8th_bit &&
+	protocol.peer_can_variable_headers =
+	    (protocol.rxd_header[ZF3] & ZF3_ZCANVHDR) != 0U;
+	current_mobyturbo = protocol.peer_can_variable_headers && !opt_M &&
+	    !opt_escape_8th_bit &&
 	    protocol.mobyturbo_probe_passed &&
 	    (opt_m || (protocol.rxd_header[ZF3] & ZF3_ZMOBY) != 0U);
 	if (opt_d && (opt_m || (protocol.rxd_header[ZF3] & ZF3_ZMOBY) != 0U)) {

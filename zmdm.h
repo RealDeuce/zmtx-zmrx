@@ -101,7 +101,7 @@ struct zmodem {
 	bool escape_8th_bit;
 	bool escape_iac;
 	enum zmodem_escape8_format receive_escape8_format;
-	bool use_variable_headers;
+	bool peer_can_variable_headers;
 	bool management_newer;
 	bool management_clobber;
 	bool management_protect;

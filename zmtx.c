@@ -216,7 +216,7 @@ parse_zrinit(void)
 	    (protocol.rxd_header[ZF0] & ZF0_ESCCTL) != 0;
 	protocol.escape_8th_bit =
 	    (protocol.rxd_header[ZF0] & ZF0_ESC8) != 0;
-	protocol.use_variable_headers =
+	protocol.peer_can_variable_headers =
 	    (protocol.rxd_header[ZF1] & ZF1_CANVHDR) != 0;
 	receiver_buffer_size = (uint16_t)protocol.rxd_header[ZP0] |
 	    (uint16_t)((uint16_t)protocol.rxd_header[ZP1] << 8);
@@ -1253,7 +1253,7 @@ main(int argc,char ** argv)
 		(void)fprintf(stderr,"receiver %s fcs 32\n"               ,protocol.can_fcs_32                    ? "can"      : "can't");
 		(void)fprintf(stderr,"receiver %s escaped control chars\n",protocol.escape_all_control_characters ? "requests" : "doesn't request");
 		(void)fprintf(stderr,"receiver %s escaped 8th bit\n"      ,protocol.escape_8th_bit                ? "requests" : "doesn't request");
-		(void)fprintf(stderr,"receiver %s use variable headers\n" ,protocol.use_variable_headers          ? "can"      : "can't");
+		(void)fprintf(stderr,"receiver %s use variable headers\n" ,protocol.peer_can_variable_headers     ? "can"      : "can't");
 		(void)fprintf(stderr,"receiver buffer size: %" PRIu16 " bytes\n",receiver_buffer_size);
 	}
 
