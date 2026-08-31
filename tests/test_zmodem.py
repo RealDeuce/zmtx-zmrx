@@ -1769,7 +1769,7 @@ class ZmodemTests(unittest.TestCase):
                     process.wait()
 
     def test_receiver_reports_over_and_out_timeouts(self):
-        for response in (b"", b"O"):
+        for response in (b"", b"O", bytes((ord("O") | 0x80,)) * 2):
             with self.subTest(response=response), \
                     tempfile.TemporaryDirectory() as temporary:
                 process, peer = self.start_receiver(temporary)
@@ -2671,7 +2671,7 @@ class ZmodemTests(unittest.TestCase):
 
     def test_receiver_accepts_parity_marked_hex_headers(self):
         with tempfile.TemporaryDirectory() as temporary:
-            process, peer = self.start_receiver(temporary)
+            process, peer = self.start_receiver(temporary, "-b")
             try:
                 info = b"parity.bin\0" + b"0 0 0 0 1 0\0"
                 peer.send(hex_header(ZFILE, parity=True) + data_subpacket(info, ZCRCW))

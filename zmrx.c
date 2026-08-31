@@ -1254,7 +1254,7 @@ main(int argc,char ** argv)
 		int c;
 		do {
 			c = rx_raw(&protocol,1000);
-			if (c >= 0) {
+			if (c >= 0 && opt_escape_8th_bit) {
 				c &= 0x7f;
 			}
 		} while (c >= 0 && c != 'O');
@@ -1262,7 +1262,7 @@ main(int argc,char ** argv)
 		if (c == 'O') {
 			do {
 				c = rx_raw(&protocol,1000);
-				if (c >= 0) {
+				if (c >= 0 && opt_escape_8th_bit) {
 					c &= 0x7f;
 				}
 			} while (c >= 0 && c != 'O');
