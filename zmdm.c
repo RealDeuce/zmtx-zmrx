@@ -927,9 +927,9 @@ typedef uint64_t span_word;
 #define SPAN_WORD_HIGHS UINT64_C(0x8080808080808080)
 #define SPAN_WORD_ZDLE UINT64_C(0x1818181818181818)
 #define SPAN_WORD_CONTROL_MASK UINT64_C(0x7f7f7f7f7f7f7f7f)
-#define SPAN_WORD_SPECIAL_MASK UINT64_C(0x7474747474747474)
+#define SPAN_WORD_SPECIAL_MASK UINT64_C(0x7c7c7c7c7c7c7c7c)
 #define SPAN_WORD_SPECIAL UINT64_C(0x1010101010101010)
-#define SPAN_WORD_AT UINT64_C(0x4040404040404040)
+#define SPAN_WORD_CR UINT64_C(0x0d0d0d0d0d0d0d0d)
 #define SPAN_WORD_FLOW_MASK UINT64_C(0x7d7d7d7d7d7d7d7d)
 #define SPAN_WORD_FLOW UINT64_C(0x1111111111111111)
 #else
@@ -938,9 +938,9 @@ typedef uint32_t span_word;
 #define SPAN_WORD_HIGHS UINT32_C(0x80808080)
 #define SPAN_WORD_ZDLE UINT32_C(0x18181818)
 #define SPAN_WORD_CONTROL_MASK UINT32_C(0x7f7f7f7f)
-#define SPAN_WORD_SPECIAL_MASK UINT32_C(0x74747474)
+#define SPAN_WORD_SPECIAL_MASK UINT32_C(0x7c7c7c7c)
 #define SPAN_WORD_SPECIAL UINT32_C(0x10101010)
-#define SPAN_WORD_AT UINT32_C(0x40404040)
+#define SPAN_WORD_CR UINT32_C(0x0d0d0d0d)
 #define SPAN_WORD_FLOW_MASK UINT32_C(0x7d7d7d7d)
 #define SPAN_WORD_FLOW UINT32_C(0x11111111)
 #endif
@@ -960,18 +960,19 @@ tx_copy_plain_span(const uint8_t * classes,uint8_t * output,
 	}
 	while (length - span >= sizeof(span_word)) {
 		span_word word;
-		span_word masked;
+		span_word zdle;
 		span_word special;
-		span_word at;
+		span_word cr;
 
 		/* Find mandatory or conditional escapes in a plain word. */
 		(void)memcpy(&word,&data[span],sizeof(word));
-		masked = word & SPAN_WORD_CONTROL_MASK;
-		/* One predicate covers the mandatory controls and a few extras. */
+		zdle = word ^ SPAN_WORD_ZDLE;
+		/* 0x10 through 0x13 cover the mandatory controls except ZDLE. */
 		special = (word & SPAN_WORD_SPECIAL_MASK) ^ SPAN_WORD_SPECIAL;
-		at = masked ^ SPAN_WORD_AT;
-		if ((((special - ones) & ~special & highs) |
-		    ((at - ones) & ~at & highs)) != 0U) {
+		cr = (word & SPAN_WORD_CONTROL_MASK) ^ SPAN_WORD_CR;
+		if ((((zdle - ones) & ~zdle & highs) |
+		    ((special - ones) & ~special & highs) |
+		    ((cr - ones) & ~cr & highs)) != 0U) {
 			break;
 		}
 		(void)memcpy(&output[span],&word,sizeof(word));
