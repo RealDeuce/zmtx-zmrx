@@ -232,9 +232,26 @@ select_zrpos_encoding(void)
 	    (flags & ZMODEM90_REQUEST_MOBYTURBO) != 0U;
 	bool pack7_requested = (flags & ZMODEM90_REQUEST_PACK7) != 0U;
 
-	protocol.use_pack7 = pack7_requested && protocol.escape_8th_bit;
-	protocol.use_mobyturbo = mobyturbo_requested && !opt_M &&
-	    !protocol.escape_8th_bit;
+	protocol.use_pack7 = pack7_requested;
+	if (!protocol.escape_8th_bit) {
+		protocol.use_pack7 = false;
+	}
+	if (!protocol.peer_can_variable_headers) {
+		protocol.use_pack7 = false;
+	}
+	protocol.use_mobyturbo = mobyturbo_requested;
+	if (!opt_m) {
+		protocol.use_mobyturbo = false;
+	}
+	if (opt_M) {
+		protocol.use_mobyturbo = false;
+	}
+	if (protocol.escape_8th_bit) {
+		protocol.use_mobyturbo = false;
+	}
+	if (!protocol.peer_can_variable_headers) {
+		protocol.use_mobyturbo = false;
+	}
 	if (opt_d && pack7_requested) {
 		(void)fprintf(stderr,"zmtx: receiver %s Pack-7\n",
 		    protocol.use_pack7 ? "selected" : "requested unavailable");
@@ -673,6 +690,8 @@ send_file(const char * name)
 	uint8_t zfile_frame[] = { ZFILE, 0, 0, 0, 0 };
 	uint8_t zeof_frame[] = { ZEOF, 0, 0, 0, 0 };
 	bool synchronize_recovery = false;
+	bool offer_mobyturbo;
+	bool offer_pack7;
 	int type;
 	int written;
 	const char * n;
@@ -770,8 +789,26 @@ send_file(const char * name)
 	 * extended options
 	 */
 
-	zfile_frame[ZF3] = ZF3_ZCANVHDR;
-	if (opt_m && !opt_M) {
+	offer_pack7 = protocol.escape_8th_bit;
+	if (!protocol.peer_can_variable_headers) {
+		offer_pack7 = false;
+	}
+	offer_mobyturbo = opt_m;
+	if (opt_M) {
+		offer_mobyturbo = false;
+	}
+	if (protocol.escape_8th_bit) {
+		offer_mobyturbo = false;
+	}
+	if (!protocol.peer_can_variable_headers) {
+		offer_mobyturbo = false;
+	}
+	zfile_frame[ZF3] = 0U;
+	if (offer_pack7) {
+		zfile_frame[ZF3] |= ZF3_ZCANVHDR;
+	}
+	if (offer_mobyturbo) {
+		zfile_frame[ZF3] |= ZF3_ZCANVHDR;
 		zfile_frame[ZF3] |= ZF3_ZMOBY;
 	}
 
@@ -830,11 +867,13 @@ send_file(const char * name)
 	 	 * send the header and the data
 	 	 */
 
-		if (tx_mobyturbo_probe(&protocol) != 0) {
-			report_sender_protocol("can't send file header",
-			    ZMODEM_IO_ERROR);
-			(void)ZMODEM_PLAT_CLOSE(file_fd);
-			return SEND_FAILED;
+		if (offer_mobyturbo) {
+			if (tx_mobyturbo_probe(&protocol) != 0) {
+				report_sender_protocol("can't send file header",
+				    ZMODEM_IO_ERROR);
+				(void)ZMODEM_PLAT_CLOSE(file_fd);
+				return SEND_FAILED;
+			}
 		}
 		if (tx_header(&protocol,zfile_frame) != 0) {
 			report_sender_protocol("can't send file header",

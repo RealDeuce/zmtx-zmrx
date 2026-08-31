@@ -86,6 +86,7 @@ static ZMODEM_PLAT_TIMESPEC transfer_start;
 static bool transfer_clock_started;
 static bool receive_error_reported;
 static bool current_mobyturbo;
+static bool extended_zrpos_sent;
 
 static void
 report_receiver_errno(const char * operation,const char * name,int error)
@@ -214,19 +215,32 @@ tx_zrpos(uint32_t position)
 		ZRPOS, 0, 0, 0, 0, 0, 0, 0
 	};
 	uint8_t flags = 0U;
+	bool request_mobyturbo = false;
+	bool request_pack7 = false;
+	int result;
 
+	if (!extended_zrpos_sent) {
+		request_mobyturbo = current_mobyturbo;
+		if (opt_pack7) {
+			request_pack7 = protocol.peer_can_variable_headers;
+		}
+	}
 	zmodem_set_header_position(header,position);
-	if (current_mobyturbo) {
+	if (request_mobyturbo) {
 		flags |= ZMODEM90_REQUEST_MOBYTURBO;
 	}
-	if (opt_pack7 && protocol.peer_can_variable_headers) {
+	if (request_pack7) {
 		flags |= ZMODEM90_REQUEST_PACK7;
 	}
 	if (flags == 0U) {
 		return tx_header(&protocol,header);
 	}
 	header[ZMODEM90_ZRPOS_FLAGS] = flags;
-	return tx_header_length(&protocol,header,sizeof(header));
+	result = tx_header_length(&protocol,header,sizeof(header));
+	if (result == 0) {
+		extended_zrpos_sent = true;
+	}
+	return result;
 }
 
 /*
@@ -410,9 +424,18 @@ tx_zrinit(void)
 {
 	unsigned receive_buffer_size = ZMODEM_PLAT_RECEIVE_BUFFER_SIZE(&plat_io);
 	uint8_t zrinit_header[] = {
-		ZRINIT, 0, 0, ZF1_CANVHDR, ZF0_CANBRK | ZF0_CANFDX | ZF0_CANOVIO |
+		ZRINIT, 0, 0, 0, ZF0_CANBRK | ZF0_CANFDX | ZF0_CANOVIO |
 		    ZF0_CANRLE | ZF0_CANFC32
 	};
+
+	if (opt_pack7) {
+		zrinit_header[ZF1] |= ZF1_CANVHDR;
+	}
+	if (opt_m) {
+		if (!opt_M) {
+			zrinit_header[ZF1] |= ZF1_CANVHDR;
+		}
+	}
 
 	if (opt_s) {
 		if (receive_buffer_size == 0U || receive_buffer_size > ZMAXSPLEN) {
@@ -541,15 +564,30 @@ receive_file(void)
 	bool management_selected = false;
 
 	receive_error_reported = false;
+	extended_zrpos_sent = false;
 	protocol.peer_can_variable_headers =
 	    (protocol.rxd_header[ZF3] & ZF3_ZCANVHDR) != 0U;
-	current_mobyturbo = protocol.peer_can_variable_headers && !opt_M &&
-	    !opt_escape_8th_bit &&
-	    protocol.mobyturbo_probe_passed &&
-	    (opt_m || (protocol.rxd_header[ZF3] & ZF3_ZMOBY) != 0U);
-	if (opt_d && (opt_m || (protocol.rxd_header[ZF3] & ZF3_ZMOBY) != 0U)) {
-		(void)fprintf(stderr,"zmrx: MobyTurbo %s\n",
-		    current_mobyturbo ? "selected" : "transparency probe failed");
+	current_mobyturbo = opt_m;
+	if (opt_M) {
+		current_mobyturbo = false;
+	}
+	if (opt_escape_8th_bit) {
+		current_mobyturbo = false;
+	}
+	if (!protocol.peer_can_variable_headers) {
+		current_mobyturbo = false;
+	}
+	if ((protocol.rxd_header[ZF3] & ZF3_ZMOBY) == 0U) {
+		current_mobyturbo = false;
+	}
+	if (!protocol.mobyturbo_probe_passed) {
+		current_mobyturbo = false;
+	}
+	if (opt_d) {
+		if (opt_m) {
+			(void)fprintf(stderr,"zmrx: MobyTurbo %s\n",
+			    current_mobyturbo ? "selected" : "not negotiated");
+		}
 	}
 
 	mdate_known = false;

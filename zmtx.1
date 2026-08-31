@@ -51,8 +51,8 @@ receiver does not advertise overlapped I/O capability.
 .B \-m
 Offer Omen ZMODEM-90 MobyTurbo.  If the receiver observes the active
 transparency probe unchanged and requests the mode, CRC32 data is sent while
-only ZDLE is necessarily escaped.  A receiver may request the mode without
-this option; use
+only ZDLE is necessarily escaped.  The receiver must also enable MobyTurbo
+with its corresponding option.  Use
 .B \-M
 to refuse all MobyTurbo requests.
 .TP

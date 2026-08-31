@@ -52,6 +52,7 @@ ZF0_ESCCTL = 0x40
 ZF0_ESC8 = 0x80
 ZF0_CANRLE = 0x08
 ZF3_ZCANVHDR = 0x01
+ZF3_ZMOBY = 0x04
 ZCRCE = 0x68
 ZCRCG = 0x69
 ZCRCQ = 0x6A
@@ -207,6 +208,7 @@ class Peer:
         self.use_mobyturbo = False
         self.require_escaped_controls = False
         self.last_header_style = None
+        self.last_header_prefix = b""
 
     def send(self, data):
         self.sock.sendall(data)
@@ -222,8 +224,13 @@ class Peer:
         return value
 
     def header(self):
-        while self.byte() != ZPAD:
-            pass
+        prefix = bytearray()
+        while True:
+            value = self.byte()
+            if value == ZPAD:
+                break
+            prefix.append(value)
+        self.last_header_prefix = bytes(prefix)
         value = self.byte()
         if value == ZPAD:
             value = self.byte()
@@ -588,9 +595,11 @@ class ZmodemTests(unittest.TestCase):
                         (buffer_size >> 8) & 0xFF, zf1, flags))
         peer.send(hex_header(ZRINIT, header=zrinit))
         peer.require_escaped_controls = bool(flags & ZF0_ESCCTL)
-        frame_type, _, _ = peer.header()
+        frame_type, _, zfile_header = peer.header()
         self.assertEqual(frame_type, ZFILE)
         self.assertNotIn(peer.last_header_style, (ZVHEX, ZVBIN, ZVBIN32))
+        peer.zfile_header = zfile_header
+        peer.zfile_prefix = peer.last_header_prefix
         peer.data(require_escaped_8th=bool(flags & ZF0_ESC8))
         return process, peer, zrinit
 
@@ -643,6 +652,11 @@ class ZmodemTests(unittest.TestCase):
             process, peer, zrinit = self.begin_sender(
                 temporary, source.name, "-m", "-d", flags=0x23, zf1=1)
             try:
+                self.assertEqual(peer.zfile_header[1] &
+                                 (ZF3_ZCANVHDR | ZF3_ZMOBY),
+                                 ZF3_ZCANVHDR | ZF3_ZMOBY)
+                self.assertEqual(peer.zfile_prefix,
+                                 bytes((XON,)) + MOBYTURBO_PROBE)
                 peer.send(variable_hex_header(
                     bytes((ZRPOS, 0, 0, 0, 0, 0, 0, 1))))
                 frame_type, position, _ = peer.header()
@@ -667,6 +681,10 @@ class ZmodemTests(unittest.TestCase):
             process, peer, zrinit = self.begin_sender(
                 temporary, source.name, "-d", flags=0xA3, zf1=1)
             try:
+                self.assertEqual(peer.zfile_header[1] & ZF3_ZCANVHDR,
+                                 ZF3_ZCANVHDR)
+                self.assertEqual(peer.zfile_header[1] & ZF3_ZMOBY, 0)
+                self.assertEqual(peer.zfile_prefix, bytes((XON,)))
                 peer.send(variable_hex_header(
                     bytes((ZRPOS, 0, 0, 0, 0, 0, 0, 2))))
                 frame_type, position, _ = peer.header()
@@ -731,6 +749,12 @@ class ZmodemTests(unittest.TestCase):
                 self.assertEqual(len(header), 8)
                 self.assertEqual(header[1:5], b"\0\0\0\0")
                 self.assertEqual(header[7] & 1, 1)
+                peer.send(hex_header(ZDATA, 1))
+                frame_type, position, header = peer.header()
+                self.assertEqual((frame_type, position), (ZRPOS, 0))
+                self.assertEqual(len(header), 5)
+                self.assertNotIn(peer.last_header_style,
+                                 (ZVHEX, ZVBIN, ZVBIN32))
                 peer.send(mobyturbo_header(bytes((ZDATA, 0, 0, 0, 0))) +
                           mobyturbo_data(payload, ZCRCE) +
                           mobyturbo_header(bytes((ZEOF,)) +
@@ -757,6 +781,8 @@ class ZmodemTests(unittest.TestCase):
             try:
                 self.assertEqual(peer.initial_header[4] & ZF0_ESC8,
                                  ZF0_ESC8)
+                self.assertEqual(peer.initial_header[3] & ZF3_ZCANVHDR,
+                                 ZF3_ZCANVHDR)
                 info = b"pack7.bin\0" + \
                     f"{len(payload)} 0 0 0 1 0\0".encode("ascii")
                 zfile = bytes((ZFILE, ZF3_ZCANVHDR, 0, 0, 0))
@@ -767,6 +793,12 @@ class ZmodemTests(unittest.TestCase):
                 self.assertEqual(peer.last_header_style, ZVHEX)
                 self.assertEqual(len(header), 8)
                 self.assertEqual(header[7] & 2, 2)
+                peer.send(hex_header(ZDATA, 1))
+                frame_type, position, header = peer.header()
+                self.assertEqual((frame_type, position), (ZRPOS, 0))
+                self.assertEqual(len(header), 5)
+                self.assertNotIn(peer.last_header_style,
+                                 (ZVHEX, ZVBIN, ZVBIN32))
                 peer.send(pack7_header(bytes((ZDATA, 0, 0, 0, 0))) +
                           pack7_data(payload[:MAX_SUBPACKET], ZCRCG) +
                           pack7_data(payload[MAX_SUBPACKET:], ZCRCE) +
@@ -822,6 +854,9 @@ class ZmodemTests(unittest.TestCase):
             process, peer, zrinit = self.begin_sender(
                 temporary, source.name, "-m", "-M", flags=0x23, zf1=1)
             try:
+                self.assertEqual(peer.zfile_header[1] &
+                                 (ZF3_ZCANVHDR | ZF3_ZMOBY), 0)
+                self.assertEqual(peer.zfile_prefix, bytes((XON,)))
                 peer.send(variable_hex_header(
                     bytes((ZRPOS, 0, 0, 0, 0, 0, 0, 1))))
                 frame_type, position, _ = peer.header()
@@ -844,6 +879,9 @@ class ZmodemTests(unittest.TestCase):
             process, peer, zrinit = self.begin_sender(
                 temporary, source.name, flags=0x23, zf1=1)
             try:
+                self.assertEqual(peer.zfile_header[1] &
+                                 (ZF3_ZCANVHDR | ZF3_ZMOBY), 0)
+                self.assertEqual(peer.zfile_prefix, bytes((XON,)))
                 peer.send(variable_hex_header(
                     bytes((ZRPOS, 0, 0, 0, 0, 0, 0, 0))))
                 frame_type, position, _ = peer.header()
@@ -859,6 +897,30 @@ class ZmodemTests(unittest.TestCase):
                     process.kill()
                     process.wait()
 
+    def test_sender_requires_receiver_mobyturbo_capability(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            source = Path(temporary) / "standard.bin"
+            source.write_bytes(b"receiver did not opt in")
+            process, peer, zrinit = self.begin_sender(
+                temporary, source.name, "-m", flags=0x23, zf1=0)
+            try:
+                self.assertEqual(peer.zfile_header[1] &
+                                 (ZF3_ZCANVHDR | ZF3_ZMOBY), 0)
+                self.assertEqual(peer.zfile_prefix, bytes((XON,)))
+                peer.send(hex_header(ZRPOS, 0))
+                frame_type, position, _ = peer.header()
+                self.assertEqual((frame_type, position), (ZDATA, 0))
+                self.assertFalse(peer.use_mobyturbo)
+                payload, frame_end = peer.data()
+                self.assertEqual((payload, frame_end),
+                                 (b"receiver did not opt in", ZCRCE))
+                self.finish_sender(peer, process, zrinit, len(payload))
+            finally:
+                peer.sock.close()
+                if process.poll() is None:
+                    process.kill()
+                    process.wait()
+
     def test_sender_does_not_combine_mobyturbo_and_escape8(self):
         with tempfile.TemporaryDirectory() as temporary:
             payload = bytes((0x80, XON, ZDLE, 0xFF))
@@ -867,6 +929,10 @@ class ZmodemTests(unittest.TestCase):
             process, peer, zrinit = self.begin_sender(
                 temporary, source.name, "-m", flags=0xA3, zf1=1)
             try:
+                self.assertEqual(peer.zfile_header[1] & ZF3_ZCANVHDR,
+                                 ZF3_ZCANVHDR)
+                self.assertEqual(peer.zfile_header[1] & ZF3_ZMOBY, 0)
+                self.assertEqual(peer.zfile_prefix, bytes((XON,)))
                 peer.send(variable_hex_header(
                     bytes((ZRPOS, 0, 0, 0, 0, 0, 0, 1))))
                 frame_type, position, _ = peer.header()
@@ -906,7 +972,7 @@ class ZmodemTests(unittest.TestCase):
                     process.kill()
                     process.wait()
 
-    def test_receiver_accepts_offered_mobyturbo_by_default(self):
+    def test_receiver_requires_local_mobyturbo_option(self):
         with tempfile.TemporaryDirectory() as temporary:
             process, peer = self.start_receiver(temporary, "-d")
             try:
@@ -916,17 +982,15 @@ class ZmodemTests(unittest.TestCase):
                           data_subpacket(info, ZCRCW))
                 frame_type, _, header = peer.header()
                 self.assertEqual(frame_type, ZRPOS)
-                self.assertEqual(len(header), 8)
-                self.assertEqual(header[7] & 1, 1)
-                peer.send(mobyturbo_header(bytes((ZDATA, 0, 0, 0, 0))) +
-                          mobyturbo_data(b"", ZCRCE) +
-                          mobyturbo_header(bytes((ZEOF, 0, 0, 0, 0))))
+                self.assertEqual(len(header), 5)
+                peer.send(hex_header(ZDATA) + data_subpacket(b"", ZCRCE) +
+                          hex_header(ZEOF, 0))
                 frame_type, _, _ = peer.header()
                 self.assertEqual(frame_type, ZRINIT)
                 returncode, stderr = finish_receiver(peer, process)
                 self.assertEqual(returncode, 0,
                                  stderr.decode(errors="replace"))
-                self.assertIn(b"MobyTurbo selected", stderr)
+                self.assertNotIn(b"MobyTurbo selected", stderr)
             finally:
                 peer.sock.close()
                 if process.poll() is None:
@@ -1138,6 +1202,30 @@ class ZmodemTests(unittest.TestCase):
                     self.assertEqual(
                         peer.initial_header[4] & (ZF0_ESCCTL | ZF0_ESC8),
                         expected)
+                    returncode, stderr = finish_receiver(peer, process)
+                    self.assertEqual(
+                        returncode, 0, stderr.decode(errors="replace"))
+                finally:
+                    peer.sock.close()
+                    if process.poll() is None:
+                        process.kill()
+                        process.wait()
+
+    def test_receiver_scopes_variable_header_capability(self):
+        cases = (
+            ((), 0),
+            (("-b",), 0),
+            (("-7",), ZF3_ZCANVHDR),
+            (("-m",), ZF3_ZCANVHDR),
+            (("-mM",), 0),
+        )
+        for options, expected in cases:
+            with self.subTest(options=options), \
+                    tempfile.TemporaryDirectory() as temporary:
+                process, peer = self.start_receiver(temporary, *options)
+                try:
+                    self.assertEqual(
+                        peer.initial_header[3] & ZF3_ZCANVHDR, expected)
                     returncode, stderr = finish_receiver(peer, process)
                     self.assertEqual(
                         returncode, 0, stderr.decode(errors="replace"))

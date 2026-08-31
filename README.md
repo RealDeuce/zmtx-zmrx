@@ -176,14 +176,15 @@ SO quoting. A compatible sender selects the `0x32` format through an extended
 `ZRPOS`; otherwise the transfer continues in `0x31` mode. The CP/M receiver
 requests Pack-7 by default because compressed files are its common case.
 
-`zmtx -m` offers Omen's MobyTurbo extension and `zmrx -m` requests it.
+`zmtx -m` offers Omen's MobyTurbo extension and `zmrx -m` requests it; both
+options are required before the mode can be selected.
 MobyTurbo uses CRC32 while escaping only `ZDLE` on a transparent connection,
 so bytes normally quoted or discarded as software flow control travel without
 expansion. The peers first exchange Omen's active transparency probe and use
 the mode only when the five probe bytes arrive unchanged. `-M` explicitly
-refuses the extension. MobyTurbo is never selected by default unless the peer
-offers it, and ordinary ZMODEM has no equivalent negotiation: standard
-receivers unconditionally discard raw XON and XOFF bytes.
+refuses the extension. MobyTurbo is never selected by default, and ordinary
+ZMODEM has no equivalent negotiation: standard receivers unconditionally
+discard raw XON and XOFF bytes.
 
 `zmtx -w32K` limits transmitted but unacknowledged data to a fixed 32 KiB
 window. Values are byte counts with an optional binary `K` or `M` suffix. A
