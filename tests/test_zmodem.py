@@ -516,12 +516,12 @@ class Peer:
         return bytes(payload), frame_end
 
 
-def finish_receiver(peer, process):
+def finish_receiver(peer, process, over_and_out=b"OO"):
     peer.send(hex_header(ZFIN))
     frame_type, _, _ = peer.header()
     if frame_type != ZFIN:
         raise AssertionError(f"expected ZFIN, got {frame_type}")
-    peer.send(b"OO")
+    peer.send(over_and_out)
     _, stderr = process.communicate(timeout=10)
     return process.returncode, stderr
 
@@ -2681,7 +2681,8 @@ class ZmodemTests(unittest.TestCase):
                 peer.send(hex_header(ZEOF, parity=True))
                 frame_type, _, _ = peer.header()
                 self.assertEqual(frame_type, ZRINIT)
-                returncode, stderr = finish_receiver(peer, process)
+                returncode, stderr = finish_receiver(
+                    peer, process, bytes((ord("O") | 0x80,)) * 2)
                 self.assertEqual(returncode, 0, stderr.decode(errors="replace"))
                 self.assertEqual((Path(temporary) / "parity.bin").read_bytes(), b"")
             finally:
