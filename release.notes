@@ -25,6 +25,29 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 Special thanks to Jacques Mattheij, formerly of Mattheij Computer Service,
 and original author of zmtx/zmrx.
 
+2.06 release notes (30/08/26)
+
+Important interoperability note: release 2.05 advertised variable-length
+header support in every receiver session. This exposed a long-standing
+off-by-one variable-header length in zmtx 2.04 and earlier, so a 2.04 sender
+connected to a 2.05 receiver can become stuck in persistent protocol timeouts.
+Users of 2.05 should upgrade to this release when interoperating with earlier
+zmtx versions.
+
+Standard-length headers now retain standard framing even when both peers can
+use variable headers. Variable framing is used only for the extended ZRPOS
+which negotiates Pack-7 or MobyTurbo, and only when that extension will
+actually be used. Receivers advertise the capability only when Pack-7 or
+MobyTurbo is explicitly requested, MobyTurbo requires both endpoints to opt
+in, and recovery returns to standard ZRPOS framing after the initial extended
+request. These changes restore compatibility with older implementations and
+avoid surprising peers which do not implement the optional header format.
+
+The standard and ZedZap transmit paths recover the performance lost while
+adding the ZMODEM-90 modes. On seven-bit links, the receiver now also ignores
+the parity bit on the final OO session terminator, supporting mark, space, odd
+and even parity without relaxing validation on normal eight-bit links.
+
 2.05 release notes (30/08/26)
 
 The protocol core is now strict C99 and independent of POSIX. POSIX remains
